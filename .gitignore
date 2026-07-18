@@ -28,3 +28,4 @@ venv.bak/
 # Generated data and results (managed by preprocessing/experiment scripts)
 data/
 results/
+datasets/

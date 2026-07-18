@@ -91,9 +91,7 @@ def main():
     
     if not os.path.exists(args.input_file):
         logger.error(f"Could not find the input file: {args.input_file}")
-        # If the file is missing, we'll create a dummy one so the user can see how it works
-        logger.warning("Generating a dummy dataset for demonstration purposes...")
-        create_dummy_dataset(args.input_file)
+        raise FileNotFoundError(f"Input file not found: {args.input_file}. Please check the path and try again.")
     
     # Load the dataset
     try:
@@ -119,39 +117,6 @@ def main():
         save_split_data(df, detector_dir, detector, args.num_clients)
         
     logger.info("All done! Data preprocessing is complete.")
-
-def create_dummy_dataset(filepath):
-    """Create a dummy dataset for testing/demonstration"""
-    logger.info(f"Generating dummy data at {filepath}")
-    
-    # Create synthetic data resembling network traffic
-    num_rows = 1000
-    data = {
-        'Src IP': [f'192.168.1.{i%255}' for i in range(num_rows)],
-        'Dst IP': [f'10.0.0.{i%255}' for i in range(num_rows)],
-        'Src Port': np.random.randint(1024, 65535, num_rows),
-        'Dst Port': np.random.randint(1, 1024, num_rows),
-        'Protocol': np.random.choice(['TCP', 'UDP'], num_rows),
-        'Flow Duration': np.random.randint(100, 100000, num_rows),
-        'Tot Fwd Pkts': np.random.randint(1, 100, num_rows),
-        'Tot Bwd Pkts': np.random.randint(1, 100, num_rows),
-        'TotLen Fwd Pkts': np.random.randint(64, 15000, num_rows),
-        'TotLen Bwd Pkts': np.random.randint(64, 15000, num_rows),
-        'Flow IAT Mean': np.random.uniform(0.1, 100.0, num_rows),
-        'Flow IAT Std': np.random.uniform(0.0, 10.0, num_rows),
-        'Flow Pkts/s': np.random.uniform(0.1, 1000.0, num_rows),
-        'Attack': np.random.choice(['Benign', 'DoS', 'PortScan', 'WebAttack'], num_rows, p=[0.7, 0.1, 0.1, 0.1])
-    }
-    
-    df = pd.DataFrame(data)
-    
-    # Add some centrality columns expected by the model
-    for metric in ['betweenness', 'pagerank', 'degree', 'closeness', 'eigenvector', 'k_core', 'modularity']:
-        df[f'src_{metric}'] = np.random.uniform(0, 1, num_rows)
-        df[f'dst_{metric}'] = np.random.uniform(0, 1, num_rows)
-        
-    df.to_csv(filepath, index=False)
-    logger.info("Dummy dataset created.")
 
 if __name__ == "__main__":
     main()

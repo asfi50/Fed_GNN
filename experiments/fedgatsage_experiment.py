@@ -88,9 +88,8 @@ def check_and_preprocess_data(args):
                  input_file = os.path.join(args.data_dir, potential_files[0])
                  logger.info(f"Auto-detected input file: {input_file}")
              else:
-                 # Fallback to dummy data creation handled by preprocess_data.py
-                 input_file = os.path.join(args.data_dir, 'dummy_data.csv')
-                 logger.warning(f"No input file specified. Will generate dummy data at {input_file}")
+                 logger.error(f"No input file specified and none auto-detected in {args.data_dir}. Cannot proceed.")
+                 sys.exit(1)
             
         # Run preprocessing script
         cmd = [
