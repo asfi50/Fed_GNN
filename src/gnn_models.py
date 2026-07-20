@@ -62,7 +62,7 @@ class TemporalGATDetector(nn.Module):
         
         self.dropout = nn.Dropout(dropout)
         
-    def forward(self, x, edge_index):
+    def forward(self, x, edge_index, target_edge_index=None):
         # Residual connection 1
         res1 = self.skip_conn1(x)
         
@@ -92,7 +92,10 @@ class TemporalGATDetector(nn.Module):
         x = self.dropout(x)
         
         # Edge prediction for flow classification
-        edge_src, edge_dst = edge_index
+        if target_edge_index is None:
+            target_edge_index = edge_index
+            
+        edge_src, edge_dst = target_edge_index
         edge_features = torch.cat([x[edge_src], x[edge_dst]], dim=1)
         edge_predictions = self.edge_classifier(edge_features)
         

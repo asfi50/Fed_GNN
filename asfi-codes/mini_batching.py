@@ -17,9 +17,10 @@ def train_client_model_minibatch(model, data: dict, device: torch.device, num_ep
     criterion = nn.CrossEntropyLoss()
     
     # Extract tensors and keep them on CPU to save GPU memory
-    x = data['features']
-    edge_index = data['edge_index']
-    edge_labels = data['edge_labels']
+    # Call .contiguous() to satisfy pyg-lib C++ backend memory layout requirements
+    x = data['features'].contiguous()
+    edge_index = data['edge_index'].contiguous()
+    edge_labels = data['edge_labels'].contiguous()
     
     # Create the PyTorch Geometric Data object required by LinkNeighborLoader
     graph_data = Data(x=x, edge_index=edge_index)
