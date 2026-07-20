@@ -265,8 +265,13 @@ def evaluate_system(fed_system: FedGATSageSystem, args) -> dict:
     logger.info("Evaluating trained federated system")
     
     try:
-        # For simplicity, we'll evaluate on one detector type's test data
-        # In practice, you'd want ensemble evaluation
+        # asfi-codes: Use Random Forest Ensemble if multiple detectors are available
+        import sys
+        from pathlib import Path
+        asfi_codes_path = str(Path(__file__).parent.parent / 'asfi-codes')
+        if asfi_codes_path not in sys.path:
+            sys.path.append(asfi_codes_path)
+            
         primary_detector = args.detector_types[0]
         test_loader = fed_system.data_loaders[primary_detector]
         
@@ -292,7 +297,19 @@ def evaluate_system(fed_system: FedGATSageSystem, args) -> dict:
             logger.warning("Test data could not be processed")
             return {}
         
-        # Get predictions from primary detector
+        # asfi-codes: Evaluate using Random Forest Ensemble if 3 detectors exist
+        expected_detectors = ['temporal', 'content', 'behavioral']
+        has_all_detectors = all(d in fed_system.client_models for d in expected_detectors)
+        
+        if has_all_detectors:
+            from ensemble_evaluator import RandomForestEnsembleEvaluator
+            evaluator = RandomForestEnsembleEvaluator(fed_system, args)
+            metrics = evaluator.evaluate(test_data_path, test_loader)
+            
+            if metrics:
+                return metrics
+        
+        # Fallback to single detector if not all are present
         primary_model = fed_system.client_models[primary_detector][0]  # Use first client's model
         primary_model.eval()
         
@@ -315,11 +332,16 @@ def evaluate_system(fed_system: FedGATSageSystem, args) -> dict:
             
             metrics = calculate_metrics(y_true, y_pred, class_names)
             
+            # Compute balanced accuracy as well for completeness
+            from sklearn.metrics import balanced_accuracy_score
+            bal_acc = balanced_accuracy_score(y_true, y_pred)
+            metrics['balanced_accuracy'] = bal_acc
+            
             # Create confusion matrix plot
             cm_path = os.path.join(args.output_dir, 'confusion_matrix.png')
             plot_confusion_matrix(y_true, y_pred, class_names, cm_path)
             
-            logger.info(f"Evaluation complete - Accuracy: {metrics['accuracy']:.4f}, F1: {metrics['macro_f1']:.4f}")
+            logger.info(f"Evaluation complete - Balanced Accuracy: {bal_acc:.4f}, Accuracy: {metrics['accuracy']:.4f}, F1: {metrics['macro_f1']:.4f}")
             
             return metrics
             

@@ -1,0 +1,109 @@
+import torch
+import numpy as np
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import balanced_accuracy_score, accuracy_score, f1_score
+import logging
+
+logger = logging.getLogger(__name__)
+
+class RandomForestEnsembleEvaluator:
+    """
+    Fuses the predictions of Temporal, Content, and Behavioral GAT detectors
+    using a Random Forest Classifier, as described in the paper.
+    """
+    def __init__(self, fed_system, args):
+        self.fed_system = fed_system
+        self.device = fed_system.device
+        self.args = args
+        self.rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
+        
+    def _extract_probabilities(self, test_data) -> tuple:
+        """
+        Runs the test data through all 3 detectors and concatenates the softmax probabilities.
+        """
+        x = test_data['features'].to(self.device)
+        edge_index = test_data['edge_index'].to(self.device)
+        edge_labels = test_data['edge_labels'].to(self.device)
+        
+        all_probs = []
+        
+        # Ensure we evaluate all three detectors
+        expected_detectors = ['temporal', 'content', 'behavioral']
+        
+        for detector_type in expected_detectors:
+            if detector_type not in self.fed_system.client_models:
+                logger.warning(f"Detector {detector_type} not found! Cannot build full ensemble.")
+                # Fill with zeros if missing to keep dimensions consistent
+                # Get num_classes from the first available model
+                first_model = list(self.fed_system.client_models.values())[0][0]
+                num_classes = first_model.classifiers[0].out_features
+                dummy_probs = torch.zeros((edge_labels.shape[0], num_classes)).to(self.device)
+                all_probs.append(dummy_probs)
+                continue
+                
+            model = self.fed_system.client_models[detector_type][0] # Using client 1's model for evaluation
+            model.eval()
+            
+            with torch.no_grad():
+                _, edge_predictions = model(x, edge_index)
+                probs = torch.softmax(edge_predictions, dim=1)
+                all_probs.append(probs)
+                
+        # Concatenate features: Shape = (num_edges, 3 * num_classes)
+        ensemble_features = torch.cat(all_probs, dim=1)
+        
+        return ensemble_features.cpu().numpy(), edge_labels.cpu().numpy()
+        
+    def evaluate(self, test_data_path: str, test_loader) -> dict:
+        """
+        Trains and evaluates the Random Forest ensemble on the test data.
+        Note: In a true pipeline, RF should be trained on a separate validation set, 
+        but for reproduction with current script constraints, we train/test on the available test data using a split.
+        """
+        import pandas as pd
+        from sklearn.model_selection import train_test_split
+        
+        logger.info("Starting Random Forest Ensemble Evaluation")
+        
+        df_test = pd.read_csv(test_data_path)
+        if self.args.demo_mode:
+            df_test = df_test.head(1000)
+            
+        # Process the data
+        df_test = test_loader.feature_engineer.extract_features(df_test)
+        df_test = test_loader.centrality_extractor.extract_centrality_features(df_test)
+        df_test = test_loader.community_processor.create_community_enhanced_features(df_test, {})
+        
+        test_data = test_loader._process_to_graph(df_test)
+        
+        if test_data is None or len(test_data['edge_labels']) == 0:
+            logger.error("Failed to process test data for ensemble evaluation.")
+            return {}
+            
+        # Extract features (probabilities from 3 GATs)
+        X, y = self._extract_probabilities(test_data)
+        
+        # Split test data to train RF and evaluate it
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.5, random_state=42)
+        
+        # Train RF
+        logger.info("Training Random Forest on detector probabilities...")
+        self.rf_model.fit(X_train, y_train)
+        
+        # Predict
+        y_pred = self.rf_model.predict(X_test)
+        
+        # Calculate metrics
+        bal_acc = balanced_accuracy_score(y_test, y_pred)
+        acc = accuracy_score(y_test, y_pred)
+        macro_f1 = f1_score(y_test, y_pred, average='macro')
+        
+        logger.info(f"Ensemble Evaluation Complete - Balanced Accuracy: {bal_acc:.4f}, Standard Accuracy: {acc:.4f}, F1: {macro_f1:.4f}")
+        
+        metrics = {
+            'accuracy': acc,
+            'balanced_accuracy': bal_acc,
+            'macro_f1': macro_f1
+        }
+        
+        return metrics

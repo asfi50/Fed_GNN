@@ -383,10 +383,15 @@ class FedGATSageSystem:
         global_x = torch.cat(all_embeddings, dim=0)
         global_y = torch.cat(all_labels, dim=0)
         
-        # Create a fully connected graph for the global model (simplified)
-        # In a real scenario, we would use the community structure to define edges
-        num_nodes = global_x.shape[0]
-        edge_index = torch.combinations(torch.arange(num_nodes), r=2).t().to(self.device)
+        # asfi-codes: Replace fully connected OOM bug with Cosine Similarity graph from paper
+        import sys
+        from pathlib import Path
+        asfi_codes_path = str(Path(__file__).parent.parent / 'asfi-codes')
+        if asfi_codes_path not in sys.path:
+            sys.path.append(asfi_codes_path)
+        from graph_utils import build_cosine_similarity_graph
+        
+        edge_index = build_cosine_similarity_graph(global_x, self.device)
         
         # Train global model
         self.global_model.train()
