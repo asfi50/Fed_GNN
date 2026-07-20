@@ -19,22 +19,17 @@ def build_cosine_similarity_graph(embeddings: torch.Tensor, device: torch.device
     
     threshold = initial_threshold
     
-    # Loop to ensure degree condition
+    # Loop to ensure degree condition without allocating dense float matrices
     while threshold >= 0.3:
-        # Create adjacency matrix based on threshold
-        adj = (sim_matrix > threshold).float()
-        
-        # Check degrees
-        degrees = adj.sum(dim=1)
+        # Check degrees directly on the boolean mask to save 4.4 GB VRAM
+        degrees = (sim_matrix > threshold).sum(dim=1)
         if (degrees < 3).any():
             threshold -= 0.05
         else:
             break
             
-    # Final adjacency matrix
-    adj = (sim_matrix > threshold).float()
-    
-    # Convert adjacency matrix to edge_index (sparse COO format)
-    edge_index = adj.nonzero(as_tuple=False).t().contiguous()
+    # Convert directly from boolean mask to edge_index (sparse COO format)
+    # This avoids creating the intermediate dense `adj` matrix
+    edge_index = (sim_matrix > threshold).nonzero(as_tuple=False).t().contiguous()
     
     return edge_index.to(device)

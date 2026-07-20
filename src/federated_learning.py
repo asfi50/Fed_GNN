@@ -286,9 +286,12 @@ class FedGATSageSystem:
         """Main federated training loop"""
         logger.info(f"Starting federated training for {num_rounds} rounds")
         
+        self.total_steps = num_rounds * len(self.detector_types) * self.num_clients
+        self.current_step = 0
+        
         for round_idx in range(num_rounds):
             round_start = time.time()
-            logger.info(f"Starting round {round_idx + 1}/{num_rounds}")
+            logger.info(f"Starting round {round_idx + 1}/{num_rounds} (Total System Steps: {self.total_steps})")
             
             # Collect updates from all clients across all detector types
             all_client_updates = []
@@ -316,7 +319,13 @@ class FedGATSageSystem:
         """Collect updates from clients for specific detector type"""
         client_updates = []
         
+        logger.info(f"  -> Processing {detector_type.capitalize()} Detector...")
+        
         for client_id in range(self.num_clients):
+            self.current_step += 1
+            progress_pct = (self.current_step / self.total_steps) * 100
+            
+            logger.info(f"    -> [{progress_pct:.1f}%] Step {self.current_step}/{self.total_steps} | Running Client {client_id + 1}/{self.num_clients} for {detector_type} detector...")
             # Load client data
             client_data = self.data_loaders[detector_type].load_client_data(client_id + 1)
             if client_data is None:
