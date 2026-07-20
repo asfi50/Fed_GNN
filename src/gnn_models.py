@@ -142,7 +142,7 @@ class ContentGATDetector(nn.Module):
         self.skip_conn2 = nn.Linear(hidden_dim, hidden_dim)
         self.dropout = nn.Dropout(dropout)
         
-    def forward(self, x, edge_index):
+    def forward(self, x, edge_index, target_edge_index=None):
         res1 = self.skip_conn1(x)
         
         x = self.gat1(x, edge_index)
@@ -167,7 +167,10 @@ class ContentGATDetector(nn.Module):
         x = F.elu(x)
         x = self.dropout(x)
         
-        edge_src, edge_dst = edge_index
+        if target_edge_index is None:
+            target_edge_index = edge_index
+            
+        edge_src, edge_dst = target_edge_index
         edge_features = torch.cat([x[edge_src], x[edge_dst]], dim=1)
         edge_predictions = self.edge_classifier(edge_features)
         
@@ -215,7 +218,7 @@ class BehavioralGATDetector(nn.Module):
         self.skip_conn2 = nn.Linear(hidden_dim, hidden_dim)
         self.dropout = nn.Dropout(dropout)
         
-    def forward(self, x, edge_index):
+    def forward(self, x, edge_index, target_edge_index=None):
         res1 = self.skip_conn1(x)
         
         x = self.gat1(x, edge_index)
@@ -240,7 +243,10 @@ class BehavioralGATDetector(nn.Module):
         x = F.elu(x)
         x = self.dropout(x)
         
-        edge_src, edge_dst = edge_index
+        if target_edge_index is None:
+            target_edge_index = edge_index
+            
+        edge_src, edge_dst = target_edge_index
         edge_features = torch.cat([x[edge_src], x[edge_dst]], dim=1)
         edge_predictions = self.edge_classifier(edge_features)
         

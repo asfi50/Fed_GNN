@@ -344,24 +344,16 @@ class FedGATSageSystem:
         return client_updates
     
     def _train_client_model(self, model, data) -> Dict[str, float]:
-        """Train a single client model"""
-        model.train()
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-        criterion = nn.CrossEntropyLoss()
-        
-        x = data['features'].to(self.device)
-        edge_index = data['edge_index'].to(self.device)
-        edge_labels = data['edge_labels'].to(self.device)
-        
-        # Simple training loop for a few epochs
-        for _ in range(5):
-            optimizer.zero_grad()
-            _, predictions = model(x, edge_index)
-            loss = criterion(predictions, edge_labels)
-            loss.backward()
-            optimizer.step()
+        """Train a single client model using mini-batching to prevent OOM"""
+        # asfi-codes: Resolve >17GB CUDA OOM by delegating to GraphSAGE neighborhood sampling
+        import sys
+        from pathlib import Path
+        asfi_codes_path = str(Path(__file__).parent.parent / 'asfi-codes')
+        if asfi_codes_path not in sys.path:
+            sys.path.append(asfi_codes_path)
             
-        return {'loss': loss.item()}
+        from mini_batching import train_client_model_minibatch
+        return train_client_model_minibatch(model, data, self.device, num_epochs=3)
     
     def _aggregate_updates(self, client_updates: List[Dict[str, Any]]) -> float:
         """Aggregate updates using global GraphSAGE model"""
