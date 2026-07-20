@@ -50,6 +50,8 @@ def parse_args():
                        help='Number of federated clients')
     parser.add_argument('--test_ratio', type=float, default=0.2,
                        help='Ratio of data to use for testing')
+    parser.add_argument('--max_rows', type=int, default=None,
+                       help='Maximum number of rows to sample randomly from the dataset')
     parser.add_argument('--seed', type=int, default=42,
                        help='Random seed for reproducibility')
     return parser.parse_args()
@@ -99,6 +101,12 @@ def main():
         # implement chunked reading or use a library like Dask.
         df = pd.read_csv(args.input_file)
         logger.info(f"Successfully loaded dataset with {len(df)} records")
+        
+        if args.max_rows is not None and len(df) > args.max_rows:
+            logger.info(f"Randomly sampling {args.max_rows} rows from the dataset (Stratified random sample)...")
+            df = df.sample(n=args.max_rows, random_state=args.seed).reset_index(drop=True)
+            logger.info(f"Dataset successfully reduced to {len(df)} records")
+            
     except Exception as e:
         logger.error(f"Failed to load dataset: {e}")
         return
