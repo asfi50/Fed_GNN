@@ -100,6 +100,26 @@ class RandomForestEnsembleEvaluator:
         
         logger.info(f"Ensemble Evaluation Complete - Balanced Accuracy: {bal_acc:.4f}, Standard Accuracy: {acc:.4f}, F1: {macro_f1:.4f}")
         
+        # Plot confusion matrix
+        try:
+            import os
+            import sys
+            # Ensure we can import utils from the src directory
+            src_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'src')
+            if src_path not in sys.path:
+                sys.path.append(src_path)
+            
+            from utils import plot_confusion_matrix
+            class_names = None
+            if test_loader.label_mapper:
+                class_names = [k for k, v in sorted(test_loader.label_mapper.items(), key=lambda x: x[1])]
+            
+            cm_path = os.path.join(self.args.output_dir, 'confusion_matrix.png')
+            plot_confusion_matrix(y_test, y_pred, class_names, cm_path)
+            logger.info(f"Confusion matrix saved to {cm_path}")
+        except Exception as e:
+            logger.error(f"Could not plot confusion matrix: {e}")
+            
         metrics = {
             'accuracy': acc,
             'balanced_accuracy': bal_acc,

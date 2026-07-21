@@ -100,6 +100,18 @@ def main():
         # We load the full dataset here. If your dataset is massive, you might want to 
         # implement chunked reading or use a library like Dask.
         df = pd.read_csv(args.input_file)
+        
+        # Standardize NF-ToN-IoT column names to match the expected format
+        column_mapping = {
+            'IPV4_SRC_ADDR': 'Src IP',
+            'IPV4_DST_ADDR': 'Dst IP',
+            'L4_SRC_PORT': 'Src Port',
+            'L4_DST_PORT': 'Dst Port',
+            'PROTOCOL': 'Protocol',
+            'FLOW_DURATION_MILLISECONDS': 'Flow Duration',
+        }
+        df = df.rename(columns=column_mapping)
+        
         logger.info(f"Successfully loaded dataset with {len(df)} records")
         
         if args.max_rows is not None and len(df) > args.max_rows:
@@ -110,6 +122,17 @@ def main():
     except Exception as e:
         logger.error(f"Failed to load dataset: {e}")
         return
+
+    # Generate and save a global label mapper BEFORE splitting the data
+    import json
+    unique_attacks = sorted(df['Attack'].unique())
+    label_mapper = {attack: int(idx) for idx, attack in enumerate(unique_attacks)}
+    
+    os.makedirs(args.output_dir, exist_ok=True)
+    mapper_path = os.path.join(args.output_dir, 'label_mapper.json')
+    with open(mapper_path, 'w') as f:
+        json.dump(label_mapper, f, indent=4)
+    logger.info(f"Saved global label mapper with {len(label_mapper)} classes to {mapper_path}")
 
     # We process data for each detector type.
     # In this reference implementation, we distribute the full dataset to all detectors.

@@ -158,10 +158,20 @@ class DataLoader:
             return None
     
     def _create_label_mapper(self, df: pd.DataFrame):
-        """Create consistent label mapping across clients"""
-        unique_attacks = sorted(df['Attack'].unique())
-        self.label_mapper = {attack: idx for idx, attack in enumerate(unique_attacks)}
-        logger.info(f"Created label mapper with {len(self.label_mapper)} classes")
+        """Load the pre-computed global label mapping across clients and test data"""
+        import json
+        parent_dir = os.path.dirname(self.data_dir)
+        mapper_path = os.path.join(parent_dir, 'label_mapper.json')
+        
+        if os.path.exists(mapper_path):
+            with open(mapper_path, 'r') as f:
+                self.label_mapper = json.load(f)
+            logger.info(f"Loaded pre-computed global label mapper with {len(self.label_mapper)} classes from {mapper_path}")
+            return
+            
+        error_msg = f"CRITICAL: Global label mapper not found at {mapper_path}. Please re-run preprocess_data.py to generate it before running experiments."
+        logger.error(error_msg)
+        raise FileNotFoundError(error_msg)
     
     def _process_to_graph(self, df: pd.DataFrame) -> Dict[str, Any]:
         """Convert DataFrame to graph format for GNN processing"""
@@ -344,8 +354,8 @@ class FedGATSageSystem:
                 client_updates.append({
                     'client_id': client_id,
                     'detector_type': detector_type,
-                    'flow_embeddings': flow_embeddings,
-                    'flow_labels': flow_labels,
+                    'flow_embeddings': flow_embeddings.detach().cpu(),
+                    'flow_labels': flow_labels.detach().cpu() if hasattr(flow_labels, 'detach') else flow_labels,
                     'model_state': client_model.state_dict(),
                     'metrics': metrics
                 })

@@ -235,7 +235,7 @@ class ExperimentTracker:
             'final_results': final_results or {}
         }
         
-        save_path = os.path.join(self.save_dir, f'{self.experiment_name}_results.json')
+        save_path = os.path.join(self.save_dir, 'result.json')
         save_results(results, save_path)
         
         return results
