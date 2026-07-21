@@ -9,6 +9,9 @@ def build_cosine_similarity_graph(embeddings: torch.Tensor, device: torch.device
     Matches Algorithm 2 in the paper.
     Uses chunked computation to prevent O(N^2) VRAM explosion (e.g., 150GB+ crashes).
     """
+    if isinstance(device, str):
+        device = torch.device(device)
+        
     num_nodes = embeddings.shape[0]
     norm_embeddings = F.normalize(embeddings, p=2, dim=1)
     
