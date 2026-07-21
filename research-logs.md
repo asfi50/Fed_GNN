@@ -16,3 +16,20 @@ We mathematically audited the training loop and engineered PyTorch Geometric's `
 
 **Result:**
 The modification successfully decoupled the dataset size from the VRAM limit, dropping the maximum required VRAM from >17GB down to ~5GB. This structural engineering fix makes the codebase fully operational on standard hardware.
+
+## [2026-07-21] Experiment: Community Detection Upgrade
+
+**Objective:**
+Upgrade the community detection algorithm from Louvain to Leiden.
+
+**Observation:**
+The legacy Louvain algorithm was theoretically flawed (producing disconnected communities) and was slower on large graphs.
+
+**Analysis:**
+**Leiden Migration:** The pipeline required a switch to Leiden, utilizing `igraph` for faster and mathematically guaranteed connected communities.
+
+**Resolution:**
+**Leiden Wrapper:** Implemented `asfi-codes/community_leiden.py` to seamlessly convert NetworkX graphs to igraph, compute the Leiden partition, and return the community mapping to the `CommunityAwareProcessor`.
+
+**Result:**
+The community detection pipeline now explicitly defaults to Leiden, boosting feature quality.

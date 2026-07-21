@@ -61,3 +61,10 @@ To track custom changes cleanly and allow easy reversion, newly implemented solu
 - **Location:** `asfi-codes/ensemble_evaluator.py` (`RandomForestEnsembleEvaluator`)
 - **Integration:** Updated `experiments/fedgatsage_experiment.py` to intercept the evaluation phase. If all three detectors (Temporal, Content, Behavioral) are present, it concatenates their Softmax probability outputs and trains a Random Forest Classifier to fuse their predictions.
 - **Result:** Matches the paper's multi-detector ensemble architecture and correctly prints `balanced_accuracy_score`.
+
+### 3. Server-Side Cosine Similarity VRAM Explosion and Edge Case Discovery
+**Fixed:** The 150GB+ VRAM crash during the Global Server Aggregation was fixed by replacing the dense $N \times N$ `torch.matmul` with a memory-safe **Chunked Block Evaluator**.
+- **Location:** `asfi-codes/graph_utils.py` (`build_cosine_similarity_graph`)
+- **Integration:** Processed the global embeddings in blocks of 5000, aggressively dumping intermediate computations to prevent VRAM spikes.
+- **Edge Case Discovery:** The legacy code contained a global `while` loop that lowered the entire graph's threshold (from 0.7 down to 0.3) if *any* single node had fewer than 3 connections. This allowed isolated outlier nodes to force the addition of massive amounts of low-quality, noisy edges globally. 
+- **Result:** The chunked block method couldn't run the global while loop without OOMing, so we approximated it by giving only the specific low-degree nodes their top-3 closest neighbors. This localized top-k fallback prevents global threshold degradation, resulting in a cleaner, sparser, and much higher-quality similarity graph.
