@@ -235,6 +235,15 @@ def run_federated_experiment(args, device: str) -> dict:
     # Run federated training
     training_results = fed_system.train_federated(num_rounds=args.num_rounds)
     
+    # Save the models
+    logger.info("Saving trained models to disk...")
+    for detector_type in args.detector_types:
+        if detector_type in fed_system.client_models:
+            model = fed_system.client_models[detector_type][0]
+            model_path = os.path.join(args.output_dir, f"{detector_type}_model.pt")
+            torch.save(model.state_dict(), model_path)
+            logger.info(f"Saved {detector_type} model to {model_path}")
+    
     # Evaluate final performance
     evaluation_results = evaluate_system(fed_system, args)
     

@@ -117,6 +117,12 @@ class RandomForestEnsembleEvaluator:
             cm_path = os.path.join(self.args.output_dir, 'confusion_matrix.png')
             plot_confusion_matrix(y_test, y_pred, class_names, cm_path)
             logger.info(f"Confusion matrix saved to {cm_path}")
+            
+            # Save the trained Random Forest model
+            import joblib
+            rf_path = os.path.join(self.args.output_dir, 'rf_model.joblib')
+            joblib.dump(self.rf_model, rf_path)
+            logger.info(f"Random Forest model saved to {rf_path}")
         except Exception as e:
             logger.error(f"Could not plot confusion matrix: {e}")
             
