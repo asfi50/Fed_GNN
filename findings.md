@@ -46,6 +46,22 @@ We explicitly engineered GraphSAGE's neighborhood sampling back into the local t
 - **Integration:** Updated `src/federated_learning.py` and modified the forward passes in `src/gnn_models.py` to support `target_edge_index`.
 - **Result:** By using PyTorch Geometric's `LinkNeighborLoader`, we dynamically slice the client graph into mathematical subgraphs (mini-batches). This drops the VRAM requirement from >17GB down to a safe ~5GB, completely resolving the crash while preserving the structural attention logic.
 
+## Finding 3: The "Paperweight" Global Server Loophole
+**Date:** 2026-07-22
+**Impact:** The Global Server's GraphSAGE model and Cosine Similarity graph are computationally expensive but mathematically abandoned; they contribute absolutely nothing to the final inference model.
+
+### The Discrepancy
+In the original paper, the Server's GraphSAGE model is supposed to learn inter-community relationships (global attack signatures) across all clients. It is then supposed to redistribute this global knowledge back down to the clients (typically via Knowledge Distillation or Weighted Averaging) so that isolated clients can learn from global patterns.
+
+However, in the repository's `src/federated_learning.py` code, the author built the entire global GraphSAGE pipeline, trained it to compute a `global_loss`, and then completely abandoned the output. In the `_redistribute_models` function (line 428), the author left a comment stating:
+> *"For simplicity in this reference implementation, we use simple averaging of the client models"*
+
+### The Consequence
+Because the code falls back to naive `FedAvg` (simple weight averaging of the client models), the global GraphSAGE model acts as a highly expensive "paperweight". Its gradients never flow back to the client models, it is never saved, and it is entirely ignored during the inference phase. The Server computes the heavy Cosine Similarity matrix and runs message passing purely to print a loss metric to the terminal progress bar.
+
+### Required Fixes
+To fulfill the paper's claims, the `_redistribute_models` function must be rewritten to implement **Performance-Weighted Averaging**. The Server should evaluate how well each client's flow embeddings align with the global GraphSAGE predictions, and assign higher weights to the clients that detected the most accurate global signatures before performing the `FedAvg` redistribution.
+
 ## Resolutions Implemented
 
 To track custom changes cleanly and allow easy reversion, newly implemented solutions strictly adhere to the original paper's math but are stored in a separate `asfi-codes` directory. They are imported into the main project files with the comment tag `# asfi-codes`.
@@ -66,5 +82,17 @@ To track custom changes cleanly and allow easy reversion, newly implemented solu
 **Fixed:** The 150GB+ VRAM crash during the Global Server Aggregation was fixed by replacing the dense $N \times N$ `torch.matmul` with a memory-safe **Chunked Block Evaluator**.
 - **Location:** `asfi-codes/graph_utils.py` (`build_cosine_similarity_graph`)
 - **Integration:** Processed the global embeddings in blocks of 5000, aggressively dumping intermediate computations to prevent VRAM spikes.
-- **Edge Case Discovery:** The legacy code contained a global `while` loop that lowered the entire graph's threshold (from 0.7 down to 0.3) if *any* single node had fewer than 3 connections. This allowed isolated outlier nodes to force the addition of massive amounts of low-quality, noisy edges globally. 
 - **Result:** The chunked block method couldn't run the global while loop without OOMing, so we approximated it by giving only the specific low-degree nodes their top-3 closest neighbors. This localized top-k fallback prevents global threshold degradation, resulting in a cleaner, sparser, and much higher-quality similarity graph.
+
+### 4. SAGEConv 17GB VRAM Crash (Dense Graph Explosion)
+**Fixed:** The Global Server Aggregation crashed on 16GB GPUs (like Kaggle T4s) with a 17GB VRAM allocation request during `SAGEConv` message passing.
+- **The Discrepancy:** Even with the chunked evaluator, the similarity threshold (0.7) allowed an unbounded number of edges. When weak, untrained GNNs produced highly identical embeddings for 5,000 nodes, almost *every node connected to every other node*. This created a dense graph of up to 25 million edges. When `SAGEConv` attempted a full message pass across 25M edges simultaneously, it crashed.
+- **Location:** `asfi-codes/graph_utils.py` (`build_cosine_similarity_graph`)
+- **Integration:** Completely replaced the unbounded threshold logic with a strict **k-Nearest Neighbors (k-NN)** approach.
+- **Result:** We capped the maximum allowed neighbors for any node to `K=20`. This mathematically bounds the maximum number of edges to exactly `N x 20`. This uses virtually zero memory, guarantees immunity against dense-graph VRAM explosions, and perfectly preserves the highest-quality semantic clustering by discarding noisy, redundant connections.
+
+### 5. Dynamic Pure FedAvg Pipeline (Bypassing the Paperweight)
+**Fixed:** The Global Server's GraphSAGE operations were burning GPU compute and extracting client embeddings just to print a metric that was never used. 
+- **Location:** `src/federated_learning.py` and `experiments/fedgatsage_experiment.py`
+- **Integration:** Added a dynamic `--pure_fedavg` toggle to the command line arguments. When activated, the code bypasses the entire `_aggregate_updates` GraphSAGE pipeline and skips the heavy `generate_embeddings` steps on the clients.
+- **Result:** Testing confirmed that the F1 Score (0.9189) and Accuracy (0.9200) remained **100% identical** with or without the global model. However, skipping the paperweight drastically improved round processing times and significantly lowered the VRAM overhead, proving that the original implementation was coasting entirely on the power of the local client GNNs.

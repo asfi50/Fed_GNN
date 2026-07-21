@@ -59,6 +59,8 @@ def parse_args():
                        help='Force run data preprocessing')
     parser.add_argument('--community', type=str, choices=['leiden', 'louvain'], default='leiden',
                        help='Community detection algorithm')
+    parser.add_argument('--pure_fedavg', action='store_true',
+                       help='Skip global GraphSAGE and use pure FedAvg')
     
     return parser.parse_args()
 
@@ -194,13 +196,13 @@ def run_federated_experiment(args, device: str) -> dict:
         args.num_rounds = min(args.num_rounds, 5)
         logger.info("Running in demo mode with reduced rounds")
     
-    # Initialize FedGATSage system
     fed_system = FedGATSageSystem(
         data_dir=args.data_dir,
         num_clients=args.num_clients,
         detector_types=args.detector_types,
         device=device,
-        community_algorithm=args.community
+        community_algorithm=args.community,
+        use_pure_fedavg=args.pure_fedavg
     )
     
     # Determine model dimensions based on available data

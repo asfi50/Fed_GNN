@@ -230,12 +230,14 @@ class FedGATSageSystem:
     def __init__(self, data_dir: str, num_clients: int = 5, 
                  detector_types: List[str] = ['temporal', 'content', 'behavioral'],
                  device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
-                 community_algorithm: str = 'leiden'):
+                 community_algorithm: str = 'leiden',
+                 use_pure_fedavg: bool = False):
         self.data_dir = data_dir
         self.num_clients = num_clients
         self.detector_types = detector_types
         self.device = device
         self.community_algorithm = community_algorithm
+        self.use_pure_fedavg = use_pure_fedavg
         
         # Initialize components for each detector type
         self.client_models = {}
@@ -311,9 +313,11 @@ class FedGATSageSystem:
             for detector_type in self.detector_types:
                 client_updates = self._collect_client_updates(detector_type)
                 all_client_updates.extend(client_updates)
-            
             # Server-side aggregation with GraphSAGE
-            global_loss = self._aggregate_updates(all_client_updates)
+            if not self.use_pure_fedavg:
+                global_loss = self._aggregate_updates(all_client_updates)
+            else:
+                global_loss = 0.0
             
             # Redistribute updated parameters
             self._redistribute_models()
@@ -348,19 +352,24 @@ class FedGATSageSystem:
             # Train client model locally
             metrics = self._train_client_model(client_model, client_data)
             
-            # Generate flow embeddings (community abstractions)
-            flow_gen = self.flow_generators[detector_type]
-            flow_embeddings, flow_labels = flow_gen.generate_embeddings(client_model, client_data)
+            client_update = {
+                'client_id': client_id,
+                'detector_type': detector_type,
+                'model_state': client_model.state_dict(),
+                'metrics': metrics
+            }
             
-            if len(flow_embeddings) > 0:
-                client_updates.append({
-                    'client_id': client_id,
-                    'detector_type': detector_type,
-                    'flow_embeddings': flow_embeddings.detach().cpu(),
-                    'flow_labels': flow_labels.detach().cpu() if hasattr(flow_labels, 'detach') else flow_labels,
-                    'model_state': client_model.state_dict(),
-                    'metrics': metrics
-                })
+            if not self.use_pure_fedavg:
+                # Generate flow embeddings (community abstractions)
+                flow_gen = self.flow_generators[detector_type]
+                flow_embeddings, flow_labels = flow_gen.generate_embeddings(client_model, client_data)
+                
+                if len(flow_embeddings) > 0:
+                    client_update['flow_embeddings'] = flow_embeddings.detach().cpu()
+                    client_update['flow_labels'] = flow_labels.detach().cpu() if hasattr(flow_labels, 'detach') else flow_labels
+                    client_updates.append(client_update)
+            else:
+                client_updates.append(client_update)
         
         return client_updates
     
