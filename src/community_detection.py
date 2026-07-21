@@ -17,9 +17,10 @@ class CommunityAwareProcessor:
     3. Translating these graph concepts into features our GNN can learn from.
     """
     
-    def __init__(self):
+    def __init__(self, community_algorithm: str = 'leiden'):
         self.communities = None
         self.modularity_vitality = None
+        self.community_algorithm = community_algorithm
         
     def detect_communities_louvain(self, graph: nx.Graph) -> Dict[int, int]:
         """
@@ -86,8 +87,19 @@ class CommunityAwareProcessor:
             else:
                 G.add_edge(src, dst, weight=1)
         
-        # Step 2: Detect communities (explicit Louvain)
-        communities = self.detect_communities_louvain(G)
+        # Step 2: Detect communities based on selected algorithm
+        if self.community_algorithm == 'leiden':
+            import sys
+            import os
+            asfi_codes_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'asfi-codes')
+            if asfi_codes_path not in sys.path:
+                sys.path.append(asfi_codes_path)
+            from community_leiden import detect_communities_leiden
+            communities = detect_communities_leiden(G)
+        else:
+            communities = self.detect_communities_louvain(G)
+            
+        self.communities = communities
         
         # Step 3: Compute modularity vitality
         mod_vitality = self.compute_modularity_vitality(G, communities)

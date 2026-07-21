@@ -57,6 +57,8 @@ def parse_args():
                        help='Run in demo mode (reduced complexity)')
     parser.add_argument('--preprocess', action='store_true',
                        help='Force run data preprocessing')
+    parser.add_argument('--community', type=str, choices=['leiden', 'louvain'], default='leiden',
+                       help='Community detection algorithm')
     
     return parser.parse_args()
 
@@ -132,11 +134,11 @@ def setup_experiment(args):
     
     return device
 
-def demonstrate_community_abstraction(data_dir: str):
+def demonstrate_community_abstraction(data_dir: str, community_algorithm: str = 'leiden'):
     """Demonstrate the community abstraction mechanism"""
     logger.info("=== DEMONSTRATING COMMUNITY ABSTRACTION ===")
     
-    processor = CommunityAwareProcessor()
+    processor = CommunityAwareProcessor(community_algorithm)
     print(processor.explain_flow_as_community_abstraction())
     
     # Try to load a sample dataset to show community detection
@@ -197,7 +199,8 @@ def run_federated_experiment(args, device: str) -> dict:
         data_dir=args.data_dir,
         num_clients=args.num_clients,
         detector_types=args.detector_types,
-        device=device
+        device=device,
+        community_algorithm=args.community
     )
     
     # Determine model dimensions based on available data
@@ -209,7 +212,7 @@ def run_federated_experiment(args, device: str) -> dict:
         detector_dir = os.path.join(args.data_dir, f'{detector_type}_detector')
         if os.path.exists(detector_dir):
             from federated_learning import DataLoader
-            sample_loader = DataLoader(detector_dir, detector_type)
+            sample_loader = DataLoader(detector_dir, detector_type, args.community)
             sample_data = sample_loader.load_client_data(1)
             if sample_data and 'features' in sample_data:
                 input_dim = sample_data['features'].shape[1]
@@ -392,7 +395,7 @@ if __name__ == '__main__':
     device = setup_experiment(args)
     
     # Demonstrate community abstraction (paper concept)
-    demonstrate_community_abstraction(args.data_dir)
+    demonstrate_community_abstraction(args.data_dir, args.community)
     
     # Run main experiment
     results = run_federated_experiment(args, device)

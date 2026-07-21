@@ -118,12 +118,12 @@ class FlowEmbeddingGenerator:
 class DataLoader:
     """Load and process data for FedGATSage clients"""
     
-    def __init__(self, data_dir: str, detector_type: str = 'temporal'):
+    def __init__(self, data_dir: str, detector_type: str = 'temporal', community_algorithm: str = 'leiden'):
         self.data_dir = data_dir
         self.detector_type = detector_type
         self.feature_engineer = FeatureEngineer(detector_type)
         self.centrality_extractor = CentralityFeatureExtractor()
-        self.community_processor = CommunityAwareProcessor()
+        self.community_processor = CommunityAwareProcessor(community_algorithm)
         self.label_mapper = None
     
     def load_client_data(self, client_id: int) -> Optional[Dict[str, Any]]:
@@ -229,11 +229,13 @@ class FedGATSageSystem:
     
     def __init__(self, data_dir: str, num_clients: int = 5, 
                  detector_types: List[str] = ['temporal', 'content', 'behavioral'],
-                 device: str = 'cuda' if torch.cuda.is_available() else 'cpu'):
+                 device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
+                 community_algorithm: str = 'leiden'):
         self.data_dir = data_dir
         self.num_clients = num_clients
         self.detector_types = detector_types
         self.device = device
+        self.community_algorithm = community_algorithm
         
         # Initialize components for each detector type
         self.client_models = {}
@@ -242,7 +244,7 @@ class FedGATSageSystem:
         
         for detector_type in detector_types:
             detector_dir = os.path.join(data_dir, f'{detector_type}_detector')
-            self.data_loaders[detector_type] = DataLoader(detector_dir, detector_type)
+            self.data_loaders[detector_type] = DataLoader(detector_dir, detector_type, community_algorithm)
             self.flow_generators[detector_type] = FlowEmbeddingGenerator(detector_type)
             self.client_models[detector_type] = {}
         
