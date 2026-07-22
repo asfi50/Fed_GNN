@@ -50,10 +50,29 @@ class RandomForestEnsembleEvaluator:
                 probs = torch.softmax(edge_predictions, dim=1)
                 all_probs.append(probs)
                 
-        # Concatenate features: Shape = (num_edges, 3 * num_classes)
-        ensemble_features = torch.cat(all_probs, dim=1)
+        # Concatenate probabilities: Shape = (num_edges, 3 * num_classes)
+        prob_features = torch.cat(all_probs, dim=1).cpu().numpy()
         
-        return ensemble_features.cpu().numpy(), edge_labels.cpu().numpy()
+        # Inject statistical graph features (raw DataFrame columns) to give RF context
+        df = test_data.get('df', None)
+        if df is not None:
+            import pandas as pd
+            # Select some safe numerical columns that don't leak labels
+            # We take all numeric columns except the label-related ones
+            num_cols = df.select_dtypes(include=[np.number]).columns
+            cols_to_drop = [c for c in num_cols if 'label' in c.lower() or 'attack' in c.lower()]
+            raw_features = df[num_cols].drop(columns=cols_to_drop).fillna(0).values
+            
+            # Ensure the row count matches exactly
+            if len(raw_features) == len(prob_features):
+                ensemble_features = np.hstack((prob_features, raw_features))
+            else:
+                logger.warning("Row count mismatch between GNN probabilities and raw features. Using only probabilities.")
+                ensemble_features = prob_features
+        else:
+            ensemble_features = prob_features
+            
+        return ensemble_features, edge_labels.cpu().numpy()
         
     def evaluate(self, test_data_path: str, test_loader) -> dict:
         """

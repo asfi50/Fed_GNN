@@ -134,6 +134,22 @@ def main():
         json.dump(label_mapper, f, indent=4)
     logger.info(f"Saved global label mapper with {len(label_mapper)} classes to {mapper_path}")
 
+    # Calculate inverse class weights for loss function
+    import torch
+    class_counts = df['Attack'].value_counts()
+    total_samples = len(df)
+    num_classes = len(unique_attacks)
+    weights = []
+    for attack in unique_attacks:
+        count = class_counts.get(attack, 0)
+        weight = total_samples / (num_classes * count)
+        weights.append(weight)
+    
+    class_weights_tensor = torch.tensor(weights, dtype=torch.float)
+    weights_path = os.path.join(args.output_dir, 'class_weights.pt')
+    torch.save(class_weights_tensor, weights_path)
+    logger.info(f"Saved class weights to {weights_path}")
+
     # We process data for each detector type.
     # In this reference implementation, we distribute the full dataset to all detectors.
     # The specialized logic for each detector (Temporal vs Content vs Behavioral) 

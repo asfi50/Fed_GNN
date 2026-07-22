@@ -177,6 +177,7 @@ class CentralityFeatureExtractor:
         edges = list(zip(working_df[src_col], working_df[dst_col]))
         G = nx.Graph()
         G.add_edges_from(edges)
+        G.remove_edges_from(nx.selfloop_edges(G))
         
         num_nodes = G.number_of_nodes()
         

@@ -6,6 +6,26 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+class FocalLoss(nn.Module):
+    def __init__(self, weight=None, gamma=2.0, reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.weight = weight
+        self.gamma = gamma
+        self.reduction = reduction
+        self.ce = nn.CrossEntropyLoss(weight=weight, reduction='none')
+
+    def forward(self, inputs, targets):
+        ce_loss = self.ce(inputs, targets)
+        pt = torch.exp(-ce_loss)
+        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+        
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
+
 def train_client_model_minibatch(model, data: dict, device: torch.device, num_epochs: int = 3) -> dict:
     """
     Trains a GAT client model using GraphSAGE-style neighborhood sampling.
@@ -14,7 +34,13 @@ def train_client_model_minibatch(model, data: dict, device: torch.device, num_ep
     """
     model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-    criterion = nn.CrossEntropyLoss()
+    
+    import os
+    weight_tensor = None
+    if os.path.exists('data/class_weights.pt'):
+        weight_tensor = torch.load('data/class_weights.pt').to(device)
+        
+    criterion = FocalLoss(weight=weight_tensor, gamma=2.0)
     
     # Extract tensors and keep them on CPU to save GPU memory
     # Call .contiguous() to satisfy pyg-lib C++ backend memory layout requirements

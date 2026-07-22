@@ -33,3 +33,20 @@ The legacy Louvain algorithm was theoretically flawed (producing disconnected co
 
 **Result:**
 The community detection pipeline now explicitly defaults to Leiden, boosting feature quality.
+
+## [2026-07-22] Experiment: Fixing Model Confusion and Class Imbalance Bias
+
+**Objective:**
+Address the severe class imbalance and feature overlap that causes the federated ensemble to misclassify rare/similar attacks on smaller datasets (e.g., mislabeling Password/Scanning as DDoS, and XSS as Injection).
+
+**Observation:**
+The confusion matrix on a 1k sampled dataset revealed that:
+1. XSS is consistently misclassified as Injection.
+2. Password and Scanning attacks are mostly labeled as DDoS/Injection.
+3. Injection attacks are frequently mislabeled as DDoS.
+This occurs because Temporal features (volume spikes) overwhelm Behavioral/Content features, and the neural network defaults to guessing the majority classes (`DDoS`, `Injection`) due to extreme dataset imbalance.
+
+**Proposed Resolution:**
+1. **Class Weights:** Compute inverse-frequency class weights dynamically during preprocessing and inject them directly into the PyTorch `CrossEntropyLoss` function in `mini_batching.py`. This will heavily penalize the model for missing rare attacks.
+2. **Focal Loss:** Modify the loss function to implement Focal Loss, forcing the model to focus on hard-to-classify examples (like differentiating XSS from Injection) rather than easy, high-volume examples.
+3. **Random Forest Feature Injection:** Instead of passing *only* the raw GNN probabilities to the final ensemble Random Forest in `ensemble_evaluator.py`, we will also pass key engineered statistical features (e.g., average payload size, port variance). This gives the Random Forest the contextual data it needs to accurately tie-break when the Temporal GAT screams "DDoS" but the Content GAT suspects "Injection".
