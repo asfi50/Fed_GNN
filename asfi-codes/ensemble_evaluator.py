@@ -1,3 +1,4 @@
+import comet_ml
 import torch
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
@@ -123,6 +124,17 @@ class RandomForestEnsembleEvaluator:
             rf_path = os.path.join(self.args.output_dir, 'rf_model.joblib')
             joblib.dump(self.rf_model, rf_path)
             logger.info(f"Random Forest model saved to {rf_path}")
+            
+            # Log final evaluation to comet_ml
+            exp = comet_ml.get_global_experiment()
+            if exp is not None:
+                exp.log_metrics({
+                    "Test/Balanced_Accuracy": bal_acc,
+                    "Test/Standard_Accuracy": acc,
+                    "Test/Macro_F1": macro_f1
+                })
+                exp.log_confusion_matrix(y_true=y_test.tolist(), y_predicted=y_pred.tolist(), labels=class_names)
+                
         except Exception as e:
             logger.error(f"Could not plot confusion matrix: {e}")
             

@@ -3,6 +3,7 @@ Main federated learning orchestration for FedGATSage.
 Handles client-server coordination, model aggregation, and flow embedding processing.
 """
 
+import comet_ml
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -325,6 +326,13 @@ class FedGATSageSystem:
             round_time = time.time() - round_start
             self.results['training_losses'].append(global_loss)
             self.results['round_times'].append(round_time)
+            
+            exp = comet_ml.get_global_experiment()
+            if exp is not None:
+                exp.log_metrics({
+                    "global_loss": global_loss,
+                    "round_time_seconds": round_time
+                }, step=round_idx + 1)
             
             logger.info(f"Round {round_idx + 1} completed in {round_time:.2f}s, loss: {global_loss:.4f}")
         

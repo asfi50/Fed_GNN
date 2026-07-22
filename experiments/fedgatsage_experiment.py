@@ -13,6 +13,7 @@ import subprocess
 # Add src to path
 sys.path.append(str(Path(__file__).parent.parent / 'src'))
 
+import comet_ml
 import torch
 import numpy as np
 import pandas as pd
@@ -195,6 +196,11 @@ def run_federated_experiment(args, device: str) -> dict:
     if args.demo_mode:
         args.num_rounds = min(args.num_rounds, 5)
         logger.info("Running in demo mode with reduced rounds")
+        
+    # Initialize Comet ML
+    comet_ml.login(api_key="emuhTVn5AAwEm9ALtwsL4SkUo")
+    exp = comet_ml.start(project_name="fedgatsage-research")
+    exp.log_parameters(vars(args))
     
     fed_system = FedGATSageSystem(
         data_dir=args.data_dir,
@@ -271,6 +277,11 @@ def run_federated_experiment(args, device: str) -> dict:
     
     # Save experiment
     tracker.save_experiment(final_results)
+    
+    # Finish comet run
+    exp = comet_ml.get_global_experiment()
+    if exp is not None:
+        exp.end()
     
     return final_results
 

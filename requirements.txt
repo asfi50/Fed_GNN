@@ -31,3 +31,6 @@ numba>=0.54.0
 # Install Leiden algorithm for community detection
 leidenalg>=0.9.1
 igraph>=0.10.0
+
+# Experiment Tracking
+comet_ml>=3.30.0
