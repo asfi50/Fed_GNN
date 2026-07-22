@@ -119,6 +119,19 @@ class RandomForestEnsembleEvaluator:
             plot_confusion_matrix(y_test, y_pred, class_names, cm_path)
             logger.info(f"Confusion matrix saved to {cm_path}")
             
+            # Save the confusion matrix as CSV
+            try:
+                from sklearn.metrics import confusion_matrix
+                import pandas as pd
+                # Pass labels to ensure the matrix shape matches class_names even if some classes are missing
+                cm = confusion_matrix(y_test, y_pred, labels=range(len(class_names)))
+                cm_df = pd.DataFrame(cm, index=class_names, columns=class_names)
+                cm_csv_path = os.path.join(self.args.output_dir, 'confusion_matrix.csv')
+                cm_df.to_csv(cm_csv_path)
+                logger.info(f"Confusion matrix CSV saved to {cm_csv_path}")
+            except Exception as e:
+                logger.warning(f"Failed to save confusion matrix CSV: {e}")
+            
             # Save the trained Random Forest model
             import joblib
             rf_path = os.path.join(self.args.output_dir, 'rf_model.joblib')

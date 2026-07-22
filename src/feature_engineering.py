@@ -140,27 +140,86 @@ class FeatureEngineer:
         return df
 
 class CentralityFeatureExtractor:
-    """Extract community-aware centrality features"""
+    """Extract community-aware centrality features dynamically"""
     
     def __init__(self):
         self.centrality_cache = {}
     
     def extract_centrality_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Extract centrality features that capture community structure.
-        Assumes centrality measures are pre-computed in dataset.
+        Extract centrality features dynamically. 
+        If pre-computed columns exist, it uses them. Otherwise, it calculates them.
         """
-        centrality_cols = [col for col in df.columns if any(measure in col.lower() for measure in [
+        import time
+        import networkx as nx
+        
+        logger.info("Calculating centrality features dynamically (Ignoring any dataset pre-computations)...")
+        start_time = time.time()
+        
+        # Drop any existing pre-computed centrality columns to enforce strict local calculation
+        existing_centrality = [col for col in df.columns if any(measure in col.lower() for measure in [
             'betweenness', 'pagerank', 'degree', 'closeness', 'eigenvector',
             'k_core', 'k_truss', 'modularity'
         ])]
         
-        if not centrality_cols:
-            logger.warning("No centrality features found in dataset")
-            return df
+        working_df = df.drop(columns=existing_centrality) if existing_centrality else df.copy()
         
-        logger.info(f"Found {len(centrality_cols)} centrality features: {centrality_cols}")
-        return df
-
-
-
+        # We need Src IP and Dst IP. The columns might be 'IPV4_SRC_ADDR' or 'Src IP'
+        src_col = 'Src IP' if 'Src IP' in working_df.columns else 'IPV4_SRC_ADDR'
+        dst_col = 'Dst IP' if 'Dst IP' in working_df.columns else 'IPV4_DST_ADDR'
+        
+        if src_col not in working_df.columns or dst_col not in working_df.columns:
+            logger.error("Could not find IP columns to build the graph!")
+            return working_df
+            
+        # 1. Build the graph
+        # Create edgelist
+        edges = list(zip(working_df[src_col], working_df[dst_col]))
+        G = nx.Graph()
+        G.add_edges_from(edges)
+        
+        num_nodes = G.number_of_nodes()
+        
+        # 2. Calculate Fast Metrics
+        logger.info(f"Calculating Degree Centrality for {num_nodes} nodes...")
+        deg_cent = nx.degree_centrality(G)
+        
+        logger.info(f"Calculating PageRank...")
+        pagerank = nx.pagerank(G)
+        
+        logger.info(f"Calculating K-Core...")
+        core_num = nx.core_number(G)
+        
+        logger.info(f"Calculating Eigenvector Centrality...")
+        try:
+            eigen_cent = nx.eigenvector_centrality(G, max_iter=100)
+        except Exception as e:
+            logger.warning(f"Eigenvector centrality failed to converge: {e}")
+            eigen_cent = {node: 0.0 for node in G.nodes()}
+            
+        # 3. Calculate Approximated Slow Metrics
+        k_approx = min(50, num_nodes)
+        logger.info(f"Calculating Approximated Betweenness Centrality (k={k_approx})...")
+        bet_cent = nx.betweenness_centrality(G, k=k_approx)
+        
+        # 4. Inject features back into the dataframe
+        result_df = working_df.copy()
+        
+        # Map Src IP
+        result_df['src_degree'] = result_df[src_col].map(deg_cent).fillna(0.0)
+        result_df['src_pagerank'] = result_df[src_col].map(pagerank).fillna(0.0)
+        result_df['src_k_core'] = result_df[src_col].map(core_num).fillna(0.0)
+        result_df['src_eigenvector'] = result_df[src_col].map(eigen_cent).fillna(0.0)
+        result_df['src_betweenness'] = result_df[src_col].map(bet_cent).fillna(0.0)
+        
+        # Map Dst IP
+        result_df['dst_degree'] = result_df[dst_col].map(deg_cent).fillna(0.0)
+        result_df['dst_pagerank'] = result_df[dst_col].map(pagerank).fillna(0.0)
+        result_df['dst_k_core'] = result_df[dst_col].map(core_num).fillna(0.0)
+        result_df['dst_eigenvector'] = result_df[dst_col].map(eigen_cent).fillna(0.0)
+        result_df['dst_betweenness'] = result_df[dst_col].map(bet_cent).fillna(0.0)
+        
+        elapsed = time.time() - start_time
+        logger.info(f"Dynamically calculated 10 centrality features for {len(working_df)} rows in {elapsed:.2f} seconds.")
+        
+        return result_df

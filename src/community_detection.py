@@ -108,8 +108,8 @@ class CommunityAwareProcessor:
         df_enhanced = df.copy()
         df_enhanced['src_community'] = df_enhanced['Src IP'].map(communities)
         df_enhanced['dst_community'] = df_enhanced['Dst IP'].map(communities)
-        df_enhanced['src_mod_vitality'] = df_enhanced['Src IP'].map(mod_vitality)
-        df_enhanced['dst_mod_vitality'] = df_enhanced['Dst IP'].map(mod_vitality)
+        df_enhanced['src_modularity_vitality'] = df_enhanced['Src IP'].map(mod_vitality)
+        df_enhanced['dst_modularity_vitality'] = df_enhanced['Dst IP'].map(mod_vitality)
         
         # Step 5: Add inter/intra community flow indicator
         df_enhanced['is_inter_community'] = (

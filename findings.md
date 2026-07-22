@@ -62,6 +62,17 @@ Because the code falls back to naive `FedAvg` (simple weight averaging of the cl
 ### Required Fixes
 To fulfill the paper's claims, the `_redistribute_models` function must be rewritten to implement **Performance-Weighted Averaging**. The Server should evaluate how well each client's flow embeddings align with the global GraphSAGE predictions, and assign higher weights to the clients that detected the most accurate global signatures before performing the `FedAvg` redistribution.
 
+## Finding 4: The Global Centrality Data Leakage Loophole
+**Date:** 2026-07-22
+**Impact:** Allows local clients to "cheat" by using global network topology features to identify attacks, completely undermining the premise of Federated Learning.
+
+### The Discrepancy
+The original NF-ToN-IoT dataset lacks complex graph structural features. However, researchers often pre-compute NetworkX centrality metrics (Betweenness, PageRank, K-Core, etc.) on the *entire 1-Million+ row global graph* and bake them directly into the dataset's columns.
+When the dataset is sliced into 5,000-row chunks and given to federated clients, the client's GNN models simply read these pre-computed columns. This creates massive data leakage, as the local models are secretly learning from the mathematical structure of the global network—a structure they should theoretically have no access to in a decentralized environment!
+
+### Required Fixes
+To prevent data leakage, the `CentralityFeatureExtractor` must actively ignore any pre-computed dataset columns and strictly calculate centrality metrics locally on the fly, building a graph only from the specific client's isolated data chunk.
+
 ## Resolutions Implemented
 
 To track custom changes cleanly and allow easy reversion, newly implemented solutions strictly adhere to the original paper's math but are stored in a separate `asfi-codes` directory. They are imported into the main project files with the comment tag `# asfi-codes`.
@@ -96,3 +107,11 @@ To track custom changes cleanly and allow easy reversion, newly implemented solu
 - **Location:** `src/federated_learning.py` and `experiments/fedgatsage_experiment.py`
 - **Integration:** Added a dynamic `--pure_fedavg` toggle to the command line arguments. When activated, the code bypasses the entire `_aggregate_updates` GraphSAGE pipeline and skips the heavy `generate_embeddings` steps on the clients.
 - **Result:** Testing confirmed that the F1 Score (0.9189) and Accuracy (0.9200) remained **100% identical** with or without the global model. However, skipping the paperweight drastically improved round processing times and significantly lowered the VRAM overhead, proving that the original implementation was coasting entirely on the power of the local client GNNs.
+
+### 6. Dynamic Centrality Feature Extraction (Data Leakage Fix)
+**Fixed:** Forced all federated clients to dynamically compute their own local graph structure, eliminating the global data leakage loophole.
+- **Location:** `src/feature_engineering.py` (`CentralityFeatureExtractor`) and `src/community_detection.py`
+- **Integration:** Removed the fallback code that passively ingested pre-computed dataset columns. It now explicitly drops those columns, builds a pure local NetworkX graph, and mathematically calculates exactly **12 dynamic features**:
+  - **10 Features from `feature_engineering.py`:** Degree Centrality, PageRank, K-Core Number, Eigenvector Centrality, and Approximated Betweenness (for both `src` and `dst`).
+  - **2 Features from `community_detection.py`:** Modularity Vitality (calculated post-Leiden community detection and renamed to ensure the GNN pipeline picks it up).
+- **Result:** The system enforces strict federated isolation. The clients now generate their own 12 structural metrics organically, preventing the GNNs from artificially inflating their accuracy via global "cheating" columns.

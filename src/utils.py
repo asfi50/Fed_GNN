@@ -85,7 +85,8 @@ def plot_confusion_matrix(y_true: np.ndarray, y_pred: np.ndarray,
                          class_names: Optional[List[str]] = None,
                          save_path: Optional[str] = None) -> plt.Figure:
     """Plot and optionally save confusion matrix"""
-    cm = confusion_matrix(y_true, y_pred)
+    labels = range(len(class_names)) if class_names else None
+    cm = confusion_matrix(y_true, y_pred, labels=labels)
     
     fig, ax = plt.subplots(figsize=(10, 8))
     
