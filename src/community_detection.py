@@ -64,7 +64,11 @@ class CommunityAwareProcessor:
             
             if len(temp_communities) > 0:
                 temp_community_sets = self._partition_to_community_sets(temp_communities)
-                new_modularity = nx.community.modularity(temp_graph, temp_community_sets)
+                # NetworkX modularity divides by total edge weight. If graph has 0 edges, it raises ZeroDivisionError.
+                if temp_graph.size(weight='weight') > 0:
+                    new_modularity = nx.community.modularity(temp_graph, temp_community_sets)
+                else:
+                    new_modularity = 0.0
                 modularity_vitality[node] = base_modularity - new_modularity
             else:
                 modularity_vitality[node] = 0.0

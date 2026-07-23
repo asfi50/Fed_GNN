@@ -61,7 +61,7 @@ class RandomForestEnsembleEvaluator:
             # We take all numeric columns except the label-related ones
             num_cols = df.select_dtypes(include=[np.number]).columns
             cols_to_drop = [c for c in num_cols if 'label' in c.lower() or 'attack' in c.lower()]
-            raw_features = df[num_cols].drop(columns=cols_to_drop).fillna(0).values
+            raw_features = df[num_cols].drop(columns=cols_to_drop).replace([np.inf, -np.inf], np.nan).fillna(0).values
             
             # Ensure the row count matches exactly
             if len(raw_features) == len(prob_features):
@@ -71,6 +71,11 @@ class RandomForestEnsembleEvaluator:
                 ensemble_features = prob_features
         else:
             ensemble_features = prob_features
+            
+        # Sanitize all features to avoid sklearn float32 conversion errors
+        ensemble_features = np.nan_to_num(ensemble_features, nan=0.0, posinf=0.0, neginf=0.0)
+        max_f32 = np.finfo(np.float32).max
+        ensemble_features = np.clip(ensemble_features, -max_f32, max_f32)
             
         return ensemble_features, edge_labels.cpu().numpy()
         
