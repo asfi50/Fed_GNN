@@ -12,15 +12,12 @@ It performs the following steps:
      ├── temporal_detector/
      │   ├── client_1.csv
      │   ├── ...
-     │   └── test.csv
+     │   ├── val.csv      <- RF ensemble trains on this
+     │   └── test.csv     <- RF ensemble is evaluated on this
      ├── content_detector/
-     │   ├── client_1.csv
-     │   ├── ...
-     │   └── test.csv
+     │   └── ...
      └── behavioral_detector/
-         ├── client_1.csv
-         ├── ...
-         └── test.csv
+         └── ...
 
 Usage:
     python preprocess_data.py --input_file path/to/dataset.csv --output_dir data --num_clients 5
@@ -58,26 +55,32 @@ def parse_args():
 
 def save_split_data(df, output_dir, prefix, num_clients):
     """
-    Split the dataset and save it into client-specific files.
+    Split the dataset into 3 parts and save each:
     
-    We create:
-    1. A test set (20% of data) for evaluation.
-    2. Individual client files for the remaining 80% (training data).
+    - 80% Training data  -> split further into per-client CSVs (the GATs train on these)
+    - 10% Validation set -> val.csv  (the Random Forest TRAINS on this)
+    - 10% Test set       -> test.csv (the Random Forest is EVALUATED on this)
+    
+    This ensures the Random Forest never sees the test data during fitting.
     """
     os.makedirs(output_dir, exist_ok=True)
     
-    # First, let's set aside some data for testing
-    train_df, test_df = train_test_split(df, test_size=0.2, random_state=42)
+    # Step 1: Carve out the test set (10% of total data)
+    train_val_df, test_df = train_test_split(df, test_size=0.1, random_state=42)
     
-    # Save the test set
+    # Step 2: Carve out the validation set from the remaining data (10% of total = ~11.1% of remainder)
+    train_df, val_df = train_test_split(train_val_df, test_size=0.111, random_state=42)
+    
+    # Save val and test sets
+    val_path = os.path.join(output_dir, 'val.csv')
+    val_df.to_csv(val_path, index=False)
+    logger.info(f"Saved validation set to {val_path} ({len(val_df)} records)")
+    
     test_path = os.path.join(output_dir, 'test.csv')
     test_df.to_csv(test_path, index=False)
     logger.info(f"Saved test set to {test_path} ({len(test_df)} records)")
     
-    # Now, distribute the training data among the clients
-    # In this reference implementation, we use an IID split (random shuffle).
-    # For more advanced scenarios, you might want to implement non-IID splitting 
-    # (e.g., by attack type or IP range) to simulate real-world heterogeneity.
+    # Step 3: Distribute the training data (80%) among the federated clients (IID random split)
     client_dfs = np.array_split(train_df, num_clients)
     
     for i, client_df in enumerate(client_dfs):

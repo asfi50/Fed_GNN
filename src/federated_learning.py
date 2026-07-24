@@ -468,4 +468,12 @@ class FedGATSageSystem:
             
             # Update all clients with averaged state
             for client_id in self.client_models[detector_type]:
-                self.client_models[detector_type][client_id].load_state_dict(averaged_state)
+                model = self.client_models[detector_type][client_id]
+                model.load_state_dict(averaged_state)
+                
+                # Reset the optimizer state after FedAvg.
+                # Adam stores momentum (m, v) based on the OLD local weights.
+                # After averaging, those momentum values are wrong for the new weights
+                # and cause the loss to spike on the first mini-batch of the next round.
+                if hasattr(model, 'client_optimizer'):
+                    model.client_optimizer = torch.optim.Adam(model.parameters(), lr=0.001)

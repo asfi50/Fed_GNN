@@ -33,14 +33,18 @@ def train_client_model_minibatch(model, data: dict, device: torch.device, num_ep
     memory-safe subgraphs instead of feeding the entire 1.3M edge graph at once.
     """
     model.train()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    # Persist the optimizer across federated rounds.
+    # Note: federated_learning.py resets this after each FedAvg round to avoid
+    # stale Adam momentum conflicting with the newly averaged weights.
+    if not hasattr(model, 'client_optimizer'):
+        model.client_optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
+    optimizer = model.client_optimizer
     
-    import os
-    weight_tensor = None
-    if os.path.exists('data/class_weights.pt'):
-        weight_tensor = torch.load('data/class_weights.pt').to(device)
-        
-    criterion = FocalLoss(weight=weight_tensor, gamma=2.0)
+    # Use plain CrossEntropyLoss without class weights.
+    # With 9 highly-imbalanced classes (e.g., ransomware < 0.01%) the weights
+    # were causing gradient explosions that collapsed the model to predicting 1-2 classes.
+    # Once the model converges on the base classes, class weights can be re-enabled.
+    criterion = torch.nn.CrossEntropyLoss()
     
     # Extract tensors and keep them on CPU to save GPU memory
     # Call .contiguous() to satisfy pyg-lib C++ backend memory layout requirements
@@ -51,14 +55,16 @@ def train_client_model_minibatch(model, data: dict, device: torch.device, num_ep
     # Create the PyTorch Geometric Data object required by LinkNeighborLoader
     graph_data = Data(x=x, edge_index=edge_index)
     
-    # Initialize the SAGE neighborhood sampler
-    # We sample 15 neighbors for the first hop, and 10 for the second hop
+    # Initialize the SAGE neighborhood sampler.
+    # batch_size=512 (not 2048): gives ~8 batches per epoch instead of 2,
+    # resulting in ~24 gradient updates per round instead of 6.
+    # More gradient updates = better local learning before FedAvg wipes it out.
     loader = LinkNeighborLoader(
         graph_data,
         num_neighbors=[15, 10],
         edge_label_index=edge_index,
         edge_label=edge_labels,
-        batch_size=2048,
+        batch_size=512,
         shuffle=True,
         num_workers=0
     )
@@ -80,6 +86,10 @@ def train_client_model_minibatch(model, data: dict, device: torch.device, num_ep
             
             loss = criterion(predictions, batch.edge_label)
             loss.backward()
+            
+            # Clip gradients to prevent explosion from focal loss / dense graphs
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=2.0)
+            
             optimizer.step()
             
             epoch_loss += loss.item()

@@ -1,184 +1,294 @@
+"""
+Random Forest Ensemble Evaluator for FedGATSage
+================================================
+
+Overview of what this file does, top to bottom:
+
+STEP 1 — Feed validation CSV through all 3 GATs.
+          Each GAT outputs softmax probabilities for each network flow.
+
+STEP 2 — Build a new "meta-dataset" from those GAT outputs only (not the raw CSV).
+          For each flow, the feature vector contains:
+            - Temporal GAT   : [class probs] + [predicted class] + [confidence score]
+            - Content GAT    : [class probs] + [predicted class] + [confidence score]
+            - Behavioral GAT : [class probs] + [predicted class] + [confidence score]
+            - Ensemble avg   : [avg probs]   + [avg class]       + [avg confidence]
+
+STEP 3 — Train the Random Forest on this meta-dataset (val set only).
+
+STEP 4 — Feed the TEST CSV through the same 3 GATs to build a separate meta-dataset.
+
+STEP 5 — Evaluate the Random Forest on the test meta-dataset. Log all metrics to CometML.
+"""
+
+import os
+import sys
 import comet_ml
 import torch
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import balanced_accuracy_score, accuracy_score, f1_score
+import pandas as pd
 import logging
+import joblib
+
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import balanced_accuracy_score, accuracy_score, f1_score, confusion_matrix
 
 logger = logging.getLogger(__name__)
 
+# Add src/ to path so we can import plot_confusion_matrix
+src_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'src')
+if src_path not in sys.path:
+    sys.path.append(src_path)
+from utils import plot_confusion_matrix
+
+
 class RandomForestEnsembleEvaluator:
     """
-    Fuses the predictions of Temporal, Content, and Behavioral GAT detectors
-    using a Random Forest Classifier, as described in the paper.
+    Trains and evaluates a Random Forest that fuses the outputs of the
+    Temporal, Content, and Behavioral GAT detectors, as described in the paper.
     """
+    
     def __init__(self, fed_system, args):
         self.fed_system = fed_system
         self.device = fed_system.device
         self.args = args
         self.rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
-        
-    def _extract_probabilities(self, test_data) -> tuple:
+
+    # -------------------------------------------------------------------------
+    # PRIVATE HELPERS
+    # -------------------------------------------------------------------------
+
+    def _load_and_process_csv(self, csv_path: str, test_loader) -> dict:
+        """Load a CSV file and run the same feature engineering pipeline used during training."""
+        df = pd.read_csv(csv_path)
+        if self.args.demo_mode:
+            df = df.head(1000)
+        df = test_loader.feature_engineer.extract_features(df)
+        df = test_loader.centrality_extractor.extract_centrality_features(df)
+        df = test_loader.community_processor.create_community_enhanced_features(df, {})
+        return test_loader._process_to_graph(df)
+
+    def _run_gats_on_graph(self, graph_data: dict) -> tuple:
         """
-        Runs the test data through all 3 detectors and concatenates the softmax probabilities.
+        Feed a processed graph through all 3 GATs.
+        
+        Returns:
+            X           : numpy array of shape (n_flows, n_meta_features)
+                          Each row is the ensemble feature vector for one network flow.
+            y           : numpy array of ground-truth class labels (int)
+            gat_probs   : dict mapping detector_type -> raw softmax probs (numpy array)
         """
-        x = test_data['features'].to(self.device)
-        edge_index = test_data['edge_index'].to(self.device)
-        edge_labels = test_data['edge_labels'].to(self.device)
-        
-        all_probs = []
-        
-        # Ensure we evaluate all three detectors
-        expected_detectors = ['temporal', 'content', 'behavioral']
-        
-        for detector_type in expected_detectors:
+        x = graph_data['features'].to(self.device)
+        edge_index = graph_data['edge_index'].to(self.device)
+        y = graph_data['edge_labels'].cpu().numpy()
+
+        detector_order = ['temporal', 'content', 'behavioral']
+        all_probs = []   # one entry per detector (torch tensor on device)
+        gat_probs = {}   # detector_type -> numpy array, for individual evaluation
+
+        for detector_type in detector_order:
             if detector_type not in self.fed_system.client_models:
-                logger.warning(f"Detector {detector_type} not found! Cannot build full ensemble.")
-                # Fill with zeros if missing to keep dimensions consistent
-                # Get num_classes from the first available model
-                first_model = list(self.fed_system.client_models.values())[0][0]
-                num_classes = first_model.classifiers[0].out_features
-                dummy_probs = torch.zeros((edge_labels.shape[0], num_classes)).to(self.device)
-                all_probs.append(dummy_probs)
+                logger.warning(f"Detector '{detector_type}' not found. Filling with zeros.")
+                num_classes = list(self.fed_system.client_models.values())[0][0].classifiers[0].out_features
+                zeros = torch.zeros((len(y), num_classes)).to(self.device)
+                all_probs.append(zeros)
+                gat_probs[detector_type] = zeros.cpu().numpy()
                 continue
-                
-            model = self.fed_system.client_models[detector_type][0] # Using client 1's model for evaluation
+
+            # Use client 0's model for inference (it holds the federated-averaged weights)
+            model = self.fed_system.client_models[detector_type][0]
             model.eval()
-            
             with torch.no_grad():
-                _, edge_predictions = model(x, edge_index)
-                probs = torch.softmax(edge_predictions, dim=1)
-                all_probs.append(probs)
-                
-        # Concatenate probabilities: Shape = (num_edges, 3 * num_classes)
-        prob_features = torch.cat(all_probs, dim=1).cpu().numpy()
+                _, logits = model(x, edge_index)
+                probs = torch.softmax(logits, dim=1)
+            all_probs.append(probs)
+            gat_probs[detector_type] = probs.cpu().numpy()
+
+        # Build the meta-feature matrix as described in the paper:
+        # [per-GAT probs | predicted class | confidence] + [ensemble avg probs | avg class | avg confidence]
+        feature_parts = []
+        for probs in all_probs:
+            probs_np = probs.cpu().numpy()
+            pred_class = np.argmax(probs_np, axis=1, keepdims=True)   # shape (n, 1)
+            confidence = np.max(probs_np, axis=1, keepdims=True)      # shape (n, 1)
+            feature_parts.extend([probs_np, pred_class, confidence])
+
+        avg_probs = torch.stack(all_probs).mean(dim=0).cpu().numpy()
+        avg_pred_class = np.argmax(avg_probs, axis=1, keepdims=True)
+        avg_confidence = np.max(avg_probs, axis=1, keepdims=True)
+        feature_parts.extend([avg_probs, avg_pred_class, avg_confidence])
+
+        X = np.hstack(feature_parts)
+        # Sanitize for sklearn (no NaN / inf / float overflow)
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+        X = np.clip(X, -np.finfo(np.float32).max, np.finfo(np.float32).max)
+
+        return X, y, gat_probs
+
+    def _evaluate_individual_gats(self, gat_probs: dict, y_true: np.ndarray, class_names: list):
+        """Log per-GAT metrics and save their confusion matrices."""
+        order_map = {'temporal': '2', 'content': '4', 'behavioral': '3'}
         
-        # Inject statistical graph features (raw DataFrame columns) to give RF context
-        df = test_data.get('df', None)
-        if df is not None:
-            import pandas as pd
-            # Select some safe numerical columns that don't leak labels
-            # We take all numeric columns except the label-related ones
-            num_cols = df.select_dtypes(include=[np.number]).columns
-            cols_to_drop = [c for c in num_cols if 'label' in c.lower() or 'attack' in c.lower()]
-            raw_features = df[num_cols].drop(columns=cols_to_drop).replace([np.inf, -np.inf], np.nan).fillna(0).values
-            
-            # Ensure the row count matches exactly
-            if len(raw_features) == len(prob_features):
-                ensemble_features = np.hstack((prob_features, raw_features))
-            else:
-                logger.warning("Row count mismatch between GNN probabilities and raw features. Using only probabilities.")
-                ensemble_features = prob_features
-        else:
-            ensemble_features = prob_features
-            
-        # Sanitize all features to avoid sklearn float32 conversion errors
-        ensemble_features = np.nan_to_num(ensemble_features, nan=0.0, posinf=0.0, neginf=0.0)
-        max_f32 = np.finfo(np.float32).max
-        ensemble_features = np.clip(ensemble_features, -max_f32, max_f32)
-            
-        return ensemble_features, edge_labels.cpu().numpy()
-        
+        for detector_type, probs in gat_probs.items():
+            y_pred = np.argmax(probs, axis=1)
+            bal_acc = balanced_accuracy_score(y_true, y_pred)
+            acc = accuracy_score(y_true, y_pred)
+            f1 = f1_score(y_true, y_pred, average='macro')
+
+            logger.info(
+                f"{detector_type.capitalize()} GAT — "
+                f"Balanced Acc: {bal_acc:.4f} | Acc: {acc:.4f} | Macro F1: {f1:.4f}"
+            )
+
+            # Log to CometML
+            try:
+                exp = comet_ml.get_global_experiment()
+                if exp:
+                    order = order_map.get(detector_type, '5')
+                    exp.log_metrics({
+                        f"Test/{order}_{detector_type.capitalize()}_Balanced_Accuracy": bal_acc,
+                        f"Test/{order}_{detector_type.capitalize()}_Standard_Accuracy": acc,
+                        f"Test/{order}_{detector_type.capitalize()}_Macro_F1": f1,
+                    })
+            except Exception as e:
+                logger.warning(f"CometML log failed for {detector_type}: {e}")
+
+            # Save confusion matrix PNG + CSV
+            if class_names:
+                try:
+                    cm = confusion_matrix(y_true, y_pred, labels=range(len(class_names)))
+                    cm_df = pd.DataFrame(cm, index=class_names, columns=class_names)
+                    
+                    png_path = os.path.join(self.args.output_dir, f'{detector_type}_confusion_matrix.png')
+                    csv_path = os.path.join(self.args.output_dir, f'{detector_type}_confusion_matrix.csv')
+                    
+                    plot_confusion_matrix(y_true, y_pred, class_names, png_path)
+                    cm_df.to_csv(csv_path)
+                    logger.info(f"{detector_type.capitalize()} confusion matrix saved: PNG + CSV")
+                except Exception as e:
+                    logger.warning(f"Could not save confusion matrix for {detector_type}: {e}")
+
+    # -------------------------------------------------------------------------
+    # PUBLIC METHOD — MAIN ENTRY POINT
+    # -------------------------------------------------------------------------
+
     def evaluate(self, test_data_path: str, test_loader) -> dict:
         """
-        Trains and evaluates the Random Forest ensemble on the test data.
-        Note: In a true pipeline, RF should be trained on a separate validation set, 
-        but for reproduction with current script constraints, we train/test on the available test data using a split.
+        Full evaluation pipeline:
+          1. Run val.csv through all 3 GATs  -> train the Random Forest
+          2. Run test.csv through all 3 GATs -> evaluate the Random Forest
+          3. Log all metrics and save confusion matrices
         """
-        import pandas as pd
-        from sklearn.model_selection import train_test_split
-        
+        logger.info("=" * 60)
         logger.info("Starting Random Forest Ensemble Evaluation")
+        logger.info("=" * 60)
+
+        class_names = None
+        if test_loader.label_mapper:
+            class_names = [k for k, v in sorted(test_loader.label_mapper.items(), key=lambda x: x[1])]
+
+        # ------------------------------------------------------------------ #
+        # STEP 1 & 2: Build the RF training set from val.csv                 #
+        # ------------------------------------------------------------------ #
+        val_data_path = test_data_path.replace('test.csv', 'val.csv')
         
-        df_test = pd.read_csv(test_data_path)
-        if self.args.demo_mode:
-            df_test = df_test.head(1000)
-            
-        # Process the data
-        df_test = test_loader.feature_engineer.extract_features(df_test)
-        df_test = test_loader.centrality_extractor.extract_centrality_features(df_test)
-        df_test = test_loader.community_processor.create_community_enhanced_features(df_test, {})
-        
-        test_data = test_loader._process_to_graph(df_test)
-        
-        if test_data is None or len(test_data['edge_labels']) == 0:
-            logger.error("Failed to process test data for ensemble evaluation.")
-            return {}
-            
-        # Extract features (probabilities from 3 GATs)
-        X, y = self._extract_probabilities(test_data)
-        
-        # Split test data to train RF and evaluate it
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.5, random_state=42)
-        
-        # Train RF
-        logger.info("Training Random Forest on detector probabilities...")
-        self.rf_model.fit(X_train, y_train)
-        
-        # Predict
-        y_pred = self.rf_model.predict(X_test)
-        
-        # Calculate metrics
-        bal_acc = balanced_accuracy_score(y_test, y_pred)
-        acc = accuracy_score(y_test, y_pred)
-        macro_f1 = f1_score(y_test, y_pred, average='macro')
-        
-        logger.info(f"Ensemble Evaluation Complete - Balanced Accuracy: {bal_acc:.4f}, Standard Accuracy: {acc:.4f}, F1: {macro_f1:.4f}")
-        
-        # Plot confusion matrix
-        try:
-            import os
-            import sys
-            # Ensure we can import utils from the src directory
-            src_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'src')
-            if src_path not in sys.path:
-                sys.path.append(src_path)
-            
-            from utils import plot_confusion_matrix
-            class_names = None
-            if test_loader.label_mapper:
-                class_names = [k for k, v in sorted(test_loader.label_mapper.items(), key=lambda x: x[1])]
-            
-            cm_path = os.path.join(self.args.output_dir, 'confusion_matrix.png')
-            plot_confusion_matrix(y_test, y_pred, class_names, cm_path)
-            logger.info(f"Confusion matrix saved to {cm_path}")
-            
-            # Save the confusion matrix as CSV
+        if not os.path.exists(val_data_path):
+            logger.warning(
+                f"val.csv not found at '{val_data_path}'. "
+                "Re-run preprocess_data.py to generate it. "
+                "Falling back to 50/50 split of test.csv (less rigorous)."
+            )
+            # Graceful fallback: split the test set itself
+            graph_test = self._load_and_process_csv(test_data_path, test_loader)
+            if graph_test is None or len(graph_test['edge_labels']) == 0:
+                logger.error("Test graph is empty. Aborting evaluation.")
+                return {}
+            X_all, y_all, gat_probs = self._run_gats_on_graph(graph_test)
+            mid = len(y_all) // 2
+            X_val_meta, y_val_meta = X_all[:mid], y_all[:mid]
+            X_test_meta, y_test_meta = X_all[mid:], y_all[mid:]
+            gat_probs_test = gat_probs
+        else:
+            logger.info(f"[STEP 1/5] Loading and processing val.csv: {val_data_path}")
+            graph_val = self._load_and_process_csv(val_data_path, test_loader)
+            if graph_val is None or len(graph_val['edge_labels']) == 0:
+                logger.error("Validation graph is empty. Aborting evaluation.")
+                return {}
+
+            logger.info("[STEP 2/5] Running all 3 GATs on validation data to build RF training set")
+            X_val_meta, y_val_meta, _ = self._run_gats_on_graph(graph_val)
+
+            logger.info(f"[STEP 3/5] Loading and processing test.csv: {test_data_path}")
+            graph_test = self._load_and_process_csv(test_data_path, test_loader)
+            if graph_test is None or len(graph_test['edge_labels']) == 0:
+                logger.error("Test graph is empty. Aborting evaluation.")
+                return {}
+
+            logger.info("[STEP 4/5] Running all 3 GATs on test data to build RF evaluation set")
+            X_test_meta, y_test_meta, gat_probs_test = self._run_gats_on_graph(graph_test)
+
+        # ------------------------------------------------------------------ #
+        # STEP 3: Evaluate individual GATs on the TEST set                   #
+        # ------------------------------------------------------------------ #
+        logger.info("[STEP 5/5] Evaluating individual GATs and training + evaluating the Random Forest")
+        logger.info("--- Individual GAT Performance (on test set) ---")
+        self._evaluate_individual_gats(gat_probs_test, y_test_meta, class_names)
+
+        # ------------------------------------------------------------------ #
+        # STEP 4: Train RF on val meta-dataset, evaluate on test meta-dataset#
+        # ------------------------------------------------------------------ #
+        logger.info(f"--- Training Random Forest on {len(y_val_meta)} validation meta-features ---")
+        self.rf_model.fit(X_val_meta, y_val_meta)
+
+        logger.info(f"--- Evaluating Random Forest on {len(y_test_meta)} test meta-features ---")
+        y_pred = self.rf_model.predict(X_test_meta)
+
+        bal_acc = balanced_accuracy_score(y_test_meta, y_pred)
+        acc = accuracy_score(y_test_meta, y_pred)
+        f1 = f1_score(y_test_meta, y_pred, average='macro')
+
+        logger.info(
+            f"Ensemble (RF) Result — "
+            f"Balanced Acc: {bal_acc:.4f} | Acc: {acc:.4f} | Macro F1: {f1:.4f}"
+        )
+
+        # ------------------------------------------------------------------ #
+        # STEP 5: Save confusion matrices and log to CometML                  #
+        # ------------------------------------------------------------------ #
+        if class_names:
             try:
-                from sklearn.metrics import confusion_matrix
-                import pandas as pd
-                # Pass labels to ensure the matrix shape matches class_names even if some classes are missing
-                cm = confusion_matrix(y_test, y_pred, labels=range(len(class_names)))
+                cm = confusion_matrix(y_test_meta, y_pred, labels=range(len(class_names)))
                 cm_df = pd.DataFrame(cm, index=class_names, columns=class_names)
-                cm_csv_path = os.path.join(self.args.output_dir, 'confusion_matrix.csv')
-                cm_df.to_csv(cm_csv_path)
-                logger.info(f"Confusion matrix CSV saved to {cm_csv_path}")
+                png_path = os.path.join(self.args.output_dir, 'confusion_matrix.png')
+                csv_path = os.path.join(self.args.output_dir, 'confusion_matrix.csv')
+                plot_confusion_matrix(y_test_meta, y_pred, class_names, png_path)
+                cm_df.to_csv(csv_path)
+                logger.info(f"Ensemble confusion matrix saved: PNG + CSV")
             except Exception as e:
-                logger.warning(f"Failed to save confusion matrix CSV: {e}")
-            
-            # Save the trained Random Forest model
-            import joblib
+                logger.warning(f"Could not save ensemble confusion matrix: {e}")
+
+        try:
             rf_path = os.path.join(self.args.output_dir, 'rf_model.joblib')
             joblib.dump(self.rf_model, rf_path)
             logger.info(f"Random Forest model saved to {rf_path}")
-            
-            # Log final evaluation to comet_ml
-            exp = comet_ml.get_global_experiment()
-            if exp is not None:
-                exp.log_metrics({
-                    "Test/Balanced_Accuracy": bal_acc,
-                    "Test/Standard_Accuracy": acc,
-                    "Test/Macro_F1": macro_f1
-                })
-                exp.log_confusion_matrix(y_true=y_test.tolist(), y_predicted=y_pred.tolist(), labels=class_names)
-                
         except Exception as e:
-            logger.error(f"Could not plot confusion matrix: {e}")
-            
-        metrics = {
-            'accuracy': acc,
-            'balanced_accuracy': bal_acc,
-            'macro_f1': macro_f1
-        }
-        
-        return metrics
+            logger.warning(f"Could not save RF model: {e}")
+
+        try:
+            exp = comet_ml.get_global_experiment()
+            if exp:
+                exp.log_metrics({
+                    "Test/1_Balanced_Accuracy": bal_acc,
+                    "Test/1_Standard_Accuracy": acc,
+                    "Test/1_Macro_F1": f1,
+                })
+                if class_names:
+                    exp.log_confusion_matrix(
+                        y_true=y_test_meta.tolist(),
+                        y_predicted=y_pred.tolist(),
+                        labels=class_names
+                    )
+        except Exception as e:
+            logger.warning(f"CometML log failed for ensemble: {e}")
+
+        return {'accuracy': acc, 'balanced_accuracy': bal_acc, 'macro_f1': f1}
