@@ -204,6 +204,19 @@ class FeatureEngineer:
             ).astype(float).fillna(0)
             self.created_features.append('response_size_category')
             
+        # --- Password vs Injection discriminator features for Content GAT ---
+        # Password brute-force login attempts have distinct outbound byte density and flow duration
+        # compared to complex server-evaluated Injection payloads.
+        if 'OUT_BYTES' in df.columns and 'OUT_PKTS' in df.columns:
+            df['byte_per_pkt_out'] = (df['OUT_BYTES'] / (df['OUT_PKTS'] + 1e-6)).clip(0, 10000).fillna(0)
+            self.created_features.append('byte_per_pkt_out')
+        if 'OUT_PKTS' in df.columns and 'IN_PKTS' in df.columns:
+            df['out_in_pkts_ratio'] = (df['OUT_PKTS'] / (df['IN_PKTS'] + 1e-6)).clip(0, 50).fillna(0)
+            self.created_features.append('out_in_pkts_ratio')
+        if 'IN_BYTES' in df.columns and 'OUT_BYTES' in df.columns and 'FLOW_DURATION_MILLISECONDS' in df.columns:
+            df['byte_density'] = ((df['IN_BYTES'] + df['OUT_BYTES']) / (df['FLOW_DURATION_MILLISECONDS'] + 1e-3)).clip(0, 100000).fillna(0)
+            self.created_features.append('byte_density')
+            
         return df
     
     def _add_behavioral_features(self, df: pd.DataFrame) -> pd.DataFrame:

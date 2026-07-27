@@ -262,6 +262,7 @@ class FedGATSageSystem:
     
     def initialize_models(self, input_dim: int = 64, hidden_dim: int = 256, num_classes: int = 8):
         """Initialize client and server models"""
+        self.num_classes = num_classes
         
         for detector_type in self.detector_types:
             self.client_models[detector_type] = {}
@@ -440,6 +441,7 @@ class FedGATSageSystem:
         if asfi_codes_path not in sys.path:
             sys.path.append(asfi_codes_path)
         from graph_utils import build_cosine_similarity_graph
+        from mini_batching import ClassBalancedLoss
         
         edge_index = build_cosine_similarity_graph(global_x, self.device)
         
@@ -453,7 +455,14 @@ class FedGATSageSystem:
                 self.global_optimizers = {}
             self.global_optimizers[detector_type] = optimizer
             
-        criterion = nn.CrossEntropyLoss()
+        unique_labels, counts = torch.unique(global_y, return_counts=True)
+        num_cls = getattr(self, 'num_classes', 8)
+        samples_per_cls = [1.0] * num_cls
+        for label, count in zip(unique_labels, counts):
+            if label.item() < num_cls:
+                samples_per_cls[label.item()] = float(max(1, count.item()))
+                
+        criterion = ClassBalancedLoss(samples_per_cls=samples_per_cls, beta=0.9999, loss_type="focal", gamma=1.5).to(self.device)
         
         total_loss = 0.0
         num_epochs = 20

@@ -129,5 +129,17 @@ Fix systematic confusion between DDoS/Injection/Password/XSS/Scanning when runni
 **What was tried:**
 1. **Server-Side Optimization (`src/federated_learning.py`):** Replaced single-step server update with a 20-epoch training loop per round and a persistent Adam optimizer (`lr=0.005`, `weight_decay=1e-4`, grad clipping `max_norm=2.0`) to allow GraphSAGE to converge on community overlay graphs.
 2. **Adaptive Parameter Redistribution (`src/federated_learning.py`):** Implemented Equation 6 from Section 4 of the paper ($w_k = \alpha + (1-\alpha) \frac{A_k - A_{\min}}{A_{\max} - A_{\min}}$, $\alpha=0.2$). Client parameter averaging is now weighted by local validation accuracy instead of naive unweighted FedAvg.
-3. **Smoothed Inverse-Frequency Focal Loss (`asfi-codes/mini_batching.py`):** Replaced unweighted Cross-Entropy with `FocalLoss(gamma=1.5)` using square-root smoothed inverse class frequencies clipped to `[1.0, 10.0]` to prevent gradient explosions while heavily weighting rare attacks.
+3. **Smoothed Inverse-Frequency Focal Loss (`asfi-codes/mini_batching.py`):** Replaced unweighted Cross-Entropy with `FocalLoss(gamma=1.5)` using square-root smoothed inverse class frequencies clipped to `[1.0, 10.0]`. **Outcome & Deprecation:** Although applied to penalize missing rare attacks, empirical testing showed that for rare classes with low prediction confidence ($p_t$), the modulating factor $(1-p_t)^\gamma$ combined with class weights caused severe gradient instability and loss escalation instead of stable convergence. Thus, Focal Loss was deprecated and removed.
 4. **Balanced Ensemble Evaluator (`asfi-codes/ensemble_evaluator.py`):** Set `class_weight='balanced'` in `RandomForestClassifier` so meta-feature evaluation penalizes misclassifying rare attack types (e.g., `mitm`, `backdoor`).
+
+### 2026-07-27: Shift from Focal Loss to Class-Balanced Loss (CB Loss)
+
+**Goal:** Prevent gradient instability and loss explosion observed with Focal Loss while safely weighting minority attack classes (e.g., `password`, `mitm`) without degrading majority class accuracy.
+
+**What was tried:**
+1. **Class-Balanced Loss Based on Effective Number of Samples (`asfi-codes/mini_batching.py`, `src/federated_learning.py`):** Implemented `ClassBalancedLoss` from the seminal paper by Yin Cui et al. (**CVPR 2019**, *"Class-Balanced Loss Based on Effective Number of Samples"*).
+   - **Theoretical Perspective:** As sample count $n$ increases, information gain per sample decreases due to data overlap (diminishing marginal benefits). Instead of raw count $n$, the effective number of samples is defined as $E_n = \frac{1 - \beta^n}{1 - \beta}$ (using hyperparameter $\beta=0.9999$).
+   - **Implementation Details:** Replaced client mini-batch training loss (`train_client_model_minibatch`) and server global training loss (`_train_global_model`) with `ClassBalancedLoss(beta=0.9999, loss_type="focal", gamma=1.5)`.
+   - **Why Applied:** The normalized weights based on $E_n$ establish a mathematical saturation limit (ceiling), ensuring rare attack classes receive boosted emphasis while completely avoiding gradient explosion and preserving majority class boundaries (`Benign`, `Injection`).
+
+**Next Steps:** Manually run experiments to verify whether test accuracy and minority F1 scores improve empirically.

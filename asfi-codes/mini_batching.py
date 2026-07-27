@@ -1,5 +1,7 @@
+import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch_geometric.loader import LinkNeighborLoader
 from torch_geometric.data import Data
 import logging
@@ -26,6 +28,34 @@ class FocalLoss(nn.Module):
         else:
             return focal_loss
 
+class ClassBalancedLoss(nn.Module):
+    """
+    CVPR 2019: Class-Balanced Loss Based on Effective Number of Samples
+    Authors: Yin Cui, Menglin Jia, Tsung-Yi Lin, Yang Song, Serge Belongie
+    """
+    def __init__(self, samples_per_cls, beta=0.9999, loss_type="focal", gamma=1.5):
+        super(ClassBalancedLoss, self).__init__()
+        self.beta = beta
+        self.loss_type = loss_type
+        self.gamma = gamma
+        
+        samples = np.maximum(1.0, np.array(samples_per_cls, dtype=np.float64))
+        effective_num = 1.0 - np.power(beta, samples)
+        weights = (1.0 - beta) / effective_num
+        weights = (weights / np.sum(weights)) * len(samples)
+        self.register_buffer("weights", torch.tensor(weights, dtype=torch.float32))
+        
+    def forward(self, logits, labels):
+        batch_weights = self.weights[labels]
+        if self.loss_type == "cross_entropy":
+            return F.cross_entropy(logits, labels, weight=self.weights)
+        elif self.loss_type == "focal":
+            probs = F.softmax(logits, dim=1)
+            probs_true = probs.gather(1, labels.view(-1, 1)).view(-1)
+            modulating_factor = torch.pow(1.0 - probs_true, self.gamma)
+            ce_loss = F.cross_entropy(logits, labels, reduction="none")
+            return (batch_weights * modulating_factor * ce_loss).mean()
+
 def train_client_model_minibatch(model, data: dict, device: torch.device, num_epochs: int = 3) -> dict:
     """
     Trains a GAT client model using GraphSAGE-style neighborhood sampling.
@@ -40,18 +70,16 @@ def train_client_model_minibatch(model, data: dict, device: torch.device, num_ep
         model.client_optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
     optimizer = model.client_optimizer
     
-    # Compute smoothed inverse-frequency class weights clipped to [1.0, 10.0] to avoid gradient explosions
+    # CVPR 2019: Class-Balanced Loss Based on Effective Number of Samples
     unique_labels, counts = torch.unique(data['edge_labels'], return_counts=True)
     num_classes = list(model.edge_classifier[-1].parameters())[0].shape[0]
     
-    weights = torch.ones(num_classes, dtype=torch.float32, device=device)
-    max_count = counts.max().item()
+    samples_per_cls = [1.0] * num_classes
     for label, count in zip(unique_labels, counts):
         if label.item() < num_classes:
-            val = (max_count / max(1, count.item())) ** 0.5
-            weights[label.item()] = min(10.0, max(1.0, val))
+            samples_per_cls[label.item()] = float(max(1, count.item()))
             
-    criterion = FocalLoss(weight=weights, gamma=1.5)
+    criterion = ClassBalancedLoss(samples_per_cls=samples_per_cls, beta=0.9999, loss_type="focal", gamma=1.5).to(device)
     
     # Extract tensors and keep them on CPU to save GPU memory
     # Call .contiguous() to satisfy pyg-lib C++ backend memory layout requirements
