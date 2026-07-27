@@ -202,6 +202,18 @@ def run_federated_experiment(args, device: str) -> dict:
     exp = comet_ml.start(project_name="fedgatsage-research")
     exp.log_parameters(vars(args))
     
+    # Load preprocessing parameters from config file and log to Comet ML
+    import json
+    preprocess_config_path = os.path.join(args.data_dir, 'preprocess_config.json')
+    if os.path.exists(preprocess_config_path):
+        try:
+            with open(preprocess_config_path, 'r') as f:
+                prep_params = json.load(f)
+            exp.log_parameters({f"preprocess_{k}": v for k, v in prep_params.items()})
+            logger.info(f"Logged {len(prep_params)} preprocessing parameters to Comet ML from {preprocess_config_path}")
+        except Exception as e:
+            logger.warning(f"Could not load preprocess_config.json: {e}")
+    
     fed_system = FedGATSageSystem(
         data_dir=args.data_dir,
         num_clients=args.num_clients,

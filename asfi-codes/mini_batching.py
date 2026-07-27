@@ -40,11 +40,18 @@ def train_client_model_minibatch(model, data: dict, device: torch.device, num_ep
         model.client_optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
     optimizer = model.client_optimizer
     
-    # Use plain CrossEntropyLoss without class weights.
-    # With 9 highly-imbalanced classes (e.g., ransomware < 0.01%) the weights
-    # were causing gradient explosions that collapsed the model to predicting 1-2 classes.
-    # Once the model converges on the base classes, class weights can be re-enabled.
-    criterion = torch.nn.CrossEntropyLoss()
+    # Compute smoothed inverse-frequency class weights clipped to [1.0, 10.0] to avoid gradient explosions
+    unique_labels, counts = torch.unique(data['edge_labels'], return_counts=True)
+    num_classes = list(model.edge_classifier[-1].parameters())[0].shape[0]
+    
+    weights = torch.ones(num_classes, dtype=torch.float32, device=device)
+    max_count = counts.max().item()
+    for label, count in zip(unique_labels, counts):
+        if label.item() < num_classes:
+            val = (max_count / max(1, count.item())) ** 0.5
+            weights[label.item()] = min(10.0, max(1.0, val))
+            
+    criterion = FocalLoss(weight=weights, gamma=1.5)
     
     # Extract tensors and keep them on CPU to save GPU memory
     # Call .contiguous() to satisfy pyg-lib C++ backend memory layout requirements
@@ -70,6 +77,8 @@ def train_client_model_minibatch(model, data: dict, device: torch.device, num_ep
     )
     
     total_loss = 0.0
+    total_correct = 0
+    total_samples = 0
     batches = 0
     
     for epoch in range(num_epochs):
@@ -95,9 +104,15 @@ def train_client_model_minibatch(model, data: dict, device: torch.device, num_ep
             epoch_loss += loss.item()
             epoch_batches += 1
             
+            with torch.no_grad():
+                preds = predictions.argmax(dim=1)
+                total_correct += (preds == batch.edge_label).sum().item()
+                total_samples += len(batch.edge_label)
+            
         total_loss += (epoch_loss / max(1, epoch_batches))
         batches += 1
         
     avg_loss = total_loss / max(1, batches)
+    avg_acc = total_correct / max(1, total_samples)
     
-    return {'loss': avg_loss}
+    return {'loss': avg_loss, 'accuracy': avg_acc}

@@ -52,7 +52,7 @@ class RandomForestEnsembleEvaluator:
         self.fed_system = fed_system
         self.device = fed_system.device
         self.args = args
-        self.rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
+        self.rf_model = RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=42)
 
     # -------------------------------------------------------------------------
     # PRIVATE HELPERS

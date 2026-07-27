@@ -137,6 +137,25 @@ def main():
         json.dump(label_mapper, f, indent=4)
     logger.info(f"Saved global label mapper with {len(label_mapper)} classes to {mapper_path}")
 
+    # Save preprocessing parameters in config file
+    preprocess_config = {
+        'dataset': os.path.basename(args.input_file),
+        'dataset_path': os.path.abspath(args.input_file),
+        'output_dir': os.path.abspath(args.output_dir),
+        'num_clients': args.num_clients,
+        'test_ratio': args.test_ratio,
+        'max_rows_requested': args.max_rows,
+        'total_rows_processed': len(df),
+        'num_classes': len(unique_attacks),
+        'attack_classes': list(unique_attacks),
+        'seed': args.seed,
+        'preprocessing_script': 'preprocess_data.py'
+    }
+    config_path = os.path.join(args.output_dir, 'preprocess_config.json')
+    with open(config_path, 'w') as f:
+        json.dump(preprocess_config, f, indent=4)
+    logger.info(f"Saved preprocessing config to {config_path}")
+
     # Calculate inverse class weights for loss function
     import torch
     class_counts = df['Attack'].value_counts()

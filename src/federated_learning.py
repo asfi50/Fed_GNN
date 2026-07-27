@@ -292,14 +292,18 @@ class FedGATSageSystem:
         else:
             flow_embedding_dim = hidden_dim * 4
         
-        # Initialize global GraphSAGE model for each detector type
+        # Initialize global GraphSAGE model and persistent optimizer for each detector type
         self.global_models = {}
+        self.global_optimizers = {}
         for detector_type in self.detector_types:
             self.global_models[detector_type] = GlobalGraphSAGE(
                 input_dim=flow_embedding_dim,
                 hidden_dim=hidden_dim,
                 num_classes=num_classes
             ).to(self.device)
+            self.global_optimizers[detector_type] = torch.optim.Adam(
+                self.global_models[detector_type].parameters(), lr=0.005, weight_decay=1e-4
+            )
         
         logger.info(f"Initialized global models with flow embedding dim: {flow_embedding_dim}")
     
@@ -318,6 +322,9 @@ class FedGATSageSystem:
             
             for detector_type in self.detector_types:
                 client_updates = self._collect_client_updates(detector_type)
+                if not hasattr(self, 'latest_client_updates'):
+                    self.latest_client_updates = {}
+                self.latest_client_updates[detector_type] = client_updates
                 
                 # Server-side aggregation with GraphSAGE
                 if not self.use_pure_fedavg:
@@ -436,19 +443,30 @@ class FedGATSageSystem:
         
         edge_index = build_cosine_similarity_graph(global_x, self.device)
         
-        # Train global model
+        # Train global model for 20 epochs per round with persistent optimizer
         model = self.global_models[detector_type]
         model.train()
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+        optimizer = getattr(self, 'global_optimizers', {}).get(detector_type)
+        if optimizer is None:
+            optimizer = torch.optim.Adam(model.parameters(), lr=0.005, weight_decay=1e-4)
+            if not hasattr(self, 'global_optimizers'):
+                self.global_optimizers = {}
+            self.global_optimizers[detector_type] = optimizer
+            
         criterion = nn.CrossEntropyLoss()
         
-        optimizer.zero_grad()
-        _, predictions = model(global_x, edge_index)
-        loss = criterion(predictions, global_y)
-        loss.backward()
-        optimizer.step()
+        total_loss = 0.0
+        num_epochs = 20
+        for _ in range(num_epochs):
+            optimizer.zero_grad()
+            _, predictions = model(global_x, edge_index)
+            loss = criterion(predictions, global_y)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=2.0)
+            optimizer.step()
+            total_loss += loss.item()
         
-        return loss.item()
+        return total_loss / num_epochs
     
     def _redistribute_models(self):
         """Redistribute global knowledge back to clients"""
@@ -461,13 +479,33 @@ class FedGATSageSystem:
         
         for detector_type in self.detector_types:
             client_states = []
+            client_accuracies = []
+            client_upds = getattr(self, 'latest_client_updates', {}).get(detector_type, [])
+            
             for client_id in self.client_models[detector_type]:
                 client_states.append(self.client_models[detector_type][client_id].state_dict())
+                acc = 0.5
+                if client_upds and client_id < len(client_upds):
+                    acc = client_upds[client_id].get('metrics', {}).get('accuracy', 0.5)
+                client_accuracies.append(acc)
             
             if not client_states:
                 continue
                 
-            # Simple averaging (can be enhanced with performance weighting)
+            # Equation 6 from paper: w_k = alpha + (1 - alpha) * ((A_k - A_min) / (A_max - A_min))
+            alpha = 0.2
+            min_acc = min(client_accuracies) if client_accuracies else 0.5
+            max_acc = max(client_accuracies) if client_accuracies else 0.5
+            
+            if max_acc > min_acc:
+                weights = [alpha + (1.0 - alpha) * ((a - min_acc) / (max_acc - min_acc)) for a in client_accuracies]
+            else:
+                weights = [1.0 for _ in client_accuracies]
+                
+            w_sum = sum(weights) if sum(weights) > 0 else len(weights)
+            norm_weights = [w / w_sum for w in weights]
+            
+            # Adaptive performance-weighted averaging
             averaged_state = {}
             for key in client_states[0].keys():
                 # Stack all client tensors for this key
@@ -475,10 +513,10 @@ class FedGATSageSystem:
                 
                 # Handle non-floating point tensors (e.g. LongTensor for buffers)
                 if not stacked.is_floating_point():
-                    # Cast to float for averaging, then back to original type
                     averaged_state[key] = stacked.float().mean(0).type(stacked.dtype)
                 else:
-                    averaged_state[key] = stacked.mean(0)
+                    w_tensor = torch.tensor(norm_weights, device=stacked.device, dtype=stacked.dtype).view(-1, *([1] * (stacked.dim() - 1)))
+                    averaged_state[key] = (stacked * w_tensor).sum(0)
             
             # Update all clients with averaged state
             for client_id in self.client_models[detector_type]:

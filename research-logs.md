@@ -121,3 +121,13 @@ Fix systematic confusion between DDoS/Injection/Password/XSS/Scanning when runni
 - `ransomware` recall 0% — only 2 samples in test set (too rare to detect)
 
 **Next Steps:** Test with larger sample sizes (15k-20k rows) to give diversity features enough scanning examples per batch.
+
+### 2026-07-27: Multi-Epoch Server Training, Equation 6 Adaptive Weighting, and Class-Balanced Evaluator
+
+**Goal:** Resolve stalling server-side `global_loss` (~1.00) and increase test accuracy / Macro F1 on minority attack classes in FedGATSage without architectural hacks or cheating.
+
+**What was tried:**
+1. **Server-Side Optimization (`src/federated_learning.py`):** Replaced single-step server update with a 20-epoch training loop per round and a persistent Adam optimizer (`lr=0.005`, `weight_decay=1e-4`, grad clipping `max_norm=2.0`) to allow GraphSAGE to converge on community overlay graphs.
+2. **Adaptive Parameter Redistribution (`src/federated_learning.py`):** Implemented Equation 6 from Section 4 of the paper ($w_k = \alpha + (1-\alpha) \frac{A_k - A_{\min}}{A_{\max} - A_{\min}}$, $\alpha=0.2$). Client parameter averaging is now weighted by local validation accuracy instead of naive unweighted FedAvg.
+3. **Smoothed Inverse-Frequency Focal Loss (`asfi-codes/mini_batching.py`):** Replaced unweighted Cross-Entropy with `FocalLoss(gamma=1.5)` using square-root smoothed inverse class frequencies clipped to `[1.0, 10.0]` to prevent gradient explosions while heavily weighting rare attacks.
+4. **Balanced Ensemble Evaluator (`asfi-codes/ensemble_evaluator.py`):** Set `class_weight='balanced'` in `RandomForestClassifier` so meta-feature evaluation penalizes misclassifying rare attack types (e.g., `mitm`, `backdoor`).
