@@ -85,22 +85,24 @@ class RandomForestEnsembleEvaluator:
         detector_order = ['temporal', 'content', 'behavioral']
         all_probs = []   # one entry per detector (torch tensor on device)
         gat_probs = {}   # detector_type -> numpy array, for individual evaluation
-
+        
         for detector_type in detector_order:
             if detector_type not in self.fed_system.client_models:
                 logger.warning(f"Detector '{detector_type}' not found. Filling with zeros.")
-                num_classes = list(self.fed_system.client_models.values())[0][0].classifiers[0].out_features
-                zeros = torch.zeros((len(y), num_classes)).to(self.device)
+                num_classes = list(self.fed_system.client_models.values())[0][0].edge_classifier[-1].out_features
+                zeros = torch.zeros((len(y), num_classes), device=self.device)
                 all_probs.append(zeros)
                 gat_probs[detector_type] = zeros.cpu().numpy()
                 continue
 
-            # Use client 0's model for inference (it holds the federated-averaged weights)
+            # Use client 0's GAT model for inference (it holds the federated-averaged weights)
             model = self.fed_system.client_models[detector_type][0]
             model.eval()
+            
             with torch.no_grad():
                 _, logits = model(x, edge_index)
                 probs = torch.softmax(logits, dim=1)
+                
             all_probs.append(probs)
             gat_probs[detector_type] = probs.cpu().numpy()
 

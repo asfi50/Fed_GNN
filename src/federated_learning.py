@@ -27,7 +27,7 @@ class FlowEmbeddingGenerator:
     def __init__(self, detector_type: str = 'temporal'):
         self.detector_type = detector_type
         
-    def generate_embeddings(self, model, data: Dict[str, Any]) -> Tuple[torch.Tensor, torch.Tensor]:
+    def generate_embeddings(self, model, data: Dict[str, Any], sample: bool = True) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Generate flow embeddings from GAT node embeddings.
         This implements the community abstraction mechanism from Algorithm 1.
@@ -65,9 +65,13 @@ class FlowEmbeddingGenerator:
                     label_indices = mask.nonzero(as_tuple=True)[0]
                     
                     # Sample representative flows
-                    if len(label_indices) > max_per_class:
-                        perm = torch.randperm(len(label_indices))[:max_per_class]
-                        selected_indices = label_indices[perm]
+                    if sample:
+                        max_per_class = min(250, len(edge_labels) // len(unique_labels))
+                        if len(label_indices) > max_per_class:
+                            perm = torch.randperm(len(label_indices))[:max_per_class]
+                            selected_indices = label_indices[perm]
+                        else:
+                            selected_indices = label_indices
                     else:
                         selected_indices = label_indices
                     
@@ -251,8 +255,8 @@ class FedGATSageSystem:
             self.flow_generators[detector_type] = FlowEmbeddingGenerator(detector_type)
             self.client_models[detector_type] = {}
         
-        self.global_model = None
-        self.results = {'training_losses': [], 'round_times': []}
+        self.global_models = {}
+        self.results = {'training_losses': [], 'global_loss': [], 'round_times': []}
         
         logger.info(f"Initialized FedGATSage with {len(detector_types)} detector types")
     
@@ -288,16 +292,18 @@ class FedGATSageSystem:
         else:
             flow_embedding_dim = hidden_dim * 4
         
-        # Initialize global GraphSAGE model
-        self.global_model = GlobalGraphSAGE(
-            input_dim=flow_embedding_dim,
-            hidden_dim=hidden_dim,
-            num_classes=num_classes
-        ).to(self.device)
+        # Initialize global GraphSAGE model for each detector type
+        self.global_models = {}
+        for detector_type in self.detector_types:
+            self.global_models[detector_type] = GlobalGraphSAGE(
+                input_dim=flow_embedding_dim,
+                hidden_dim=hidden_dim,
+                num_classes=num_classes
+            ).to(self.device)
         
-        logger.info(f"Initialized models with flow embedding dim: {flow_embedding_dim}")
+        logger.info(f"Initialized global models with flow embedding dim: {flow_embedding_dim}")
     
-    def train_federated(self, num_rounds: int = 20) -> Dict[str, Any]:
+    def train_federated(self, num_rounds: int = 20, tracker=None) -> Dict[str, Any]:
         """Main federated training loop"""
         logger.info(f"Starting federated training for {num_rounds} rounds")
         
@@ -308,24 +314,31 @@ class FedGATSageSystem:
             round_start = time.time()
             logger.info(f"Starting round {round_idx + 1}/{num_rounds} (Total System Steps: {self.total_steps})")
             
-            # Collect updates from all clients across all detector types
-            all_client_updates = []
+            global_losses = []
             
             for detector_type in self.detector_types:
                 client_updates = self._collect_client_updates(detector_type)
-                all_client_updates.extend(client_updates)
-            # Server-side aggregation with GraphSAGE
-            if not self.use_pure_fedavg:
-                global_loss = self._aggregate_updates(all_client_updates)
-            else:
-                global_loss = 0.0
+                
+                # Server-side aggregation with GraphSAGE
+                if not self.use_pure_fedavg:
+                    loss = self._aggregate_updates(detector_type, client_updates)
+                    global_losses.append(loss)
+            
+            global_loss = sum(global_losses) / len(global_losses) if global_losses else 0.0
             
             # Redistribute updated parameters
             self._redistribute_models()
             
             round_time = time.time() - round_start
             self.results['training_losses'].append(global_loss)
+            self.results['global_loss'].append(global_loss)
             self.results['round_times'].append(round_time)
+            
+            if tracker is not None:
+                tracker.log_round_metrics(round_idx + 1, {
+                    "global_loss": global_loss,
+                    "round_time_seconds": round_time
+                })
             
             exp = comet_ml.get_global_experiment()
             if exp is not None:
@@ -393,7 +406,7 @@ class FedGATSageSystem:
         from mini_batching import train_client_model_minibatch
         return train_client_model_minibatch(model, data, self.device, num_epochs=3)
     
-    def _aggregate_updates(self, client_updates: List[Dict[str, Any]]) -> float:
+    def _aggregate_updates(self, detector_type: str, client_updates: List[Dict[str, Any]]) -> float:
         """Aggregate updates using global GraphSAGE model"""
         if not client_updates:
             return 0.0
@@ -424,12 +437,13 @@ class FedGATSageSystem:
         edge_index = build_cosine_similarity_graph(global_x, self.device)
         
         # Train global model
-        self.global_model.train()
-        optimizer = torch.optim.Adam(self.global_model.parameters(), lr=0.001)
+        model = self.global_models[detector_type]
+        model.train()
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
         criterion = nn.CrossEntropyLoss()
         
         optimizer.zero_grad()
-        _, predictions = self.global_model(global_x, edge_index)
+        _, predictions = model(global_x, edge_index)
         loss = criterion(predictions, global_y)
         loss.backward()
         optimizer.step()

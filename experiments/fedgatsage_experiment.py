@@ -241,7 +241,7 @@ def run_federated_experiment(args, device: str) -> dict:
     )
     
     # Run federated training
-    training_results = fed_system.train_federated(num_rounds=args.num_rounds)
+    training_results = fed_system.train_federated(num_rounds=args.num_rounds, tracker=tracker)
     
     # Save the models
     logger.info("Saving trained models to disk...")
