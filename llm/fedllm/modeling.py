@@ -27,19 +27,19 @@ def resolve_device(requested: str = 'auto') -> torch.device:
 
 
 def resolve_dtype(device: torch.device, preferred: str = None) -> torch.dtype:
-    """Precision of the stored weights.
+    """Precision of the FROZEN base weights.
 
-    Always fp32. Holding master weights in fp16 and optimising them directly does
-    not work: AdamW's second-moment estimate and the smaller gradients underflow
-    fp16, weights drift to NaN, and the model never leaves its initialisation.
-    Speed comes from autocast during the forward/backward pass instead, which
-    keeps fp32 masters while computing in fp16 - see train_local.
-
-    bf16 is the one exception worth taking, where the hardware supports it.
+    Half precision is free here: LoRA never updates the base, so it cannot
+    accumulate rounding error, and halving it leaves room for activations. What
+    must not be half precision is anything being optimised - AdamW's
+    second-moment estimate underflows fp16 and the weights walk into NaN - so
+    build_model upcasts every trainable tensor to fp32 afterwards.
     """
-    if device.type == 'cuda' and preferred == 'bfloat16' and torch.cuda.is_bf16_supported():
+    if device.type != 'cuda':
+        return torch.float32
+    if preferred == 'bfloat16' and torch.cuda.is_bf16_supported():
         return torch.bfloat16
-    return torch.float32
+    return torch.float16
 
 
 def autocast_dtype(device: torch.device) -> torch.dtype:
@@ -55,12 +55,6 @@ def build_model(cfg, num_labels: int, device: torch.device) -> Tuple[torch.nn.Mo
 
     tokenizer = AutoTokenizer.from_pretrained(model_cfg.hf_id)
     dtype = resolve_dtype(device, model_cfg.get('preferred_dtype'))
-
-    if model_cfg.get('half_precision_base') and device.type == 'cuda':
-        # For a base too large to hold in fp32 (gemma-4-E2B stores 5.1B weights,
-        # 20GB at fp32). The base is frozen, so half precision costs it nothing;
-        # the trainable adapters are pulled back up to fp32 below.
-        dtype = torch.float16
 
     model = AutoModelForSequenceClassification.from_pretrained(
         model_cfg.hf_id,

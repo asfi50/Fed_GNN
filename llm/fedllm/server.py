@@ -22,6 +22,13 @@ from .modeling import get_trainable_state, set_trainable_state
 logger = logging.getLogger(__name__)
 
 
+def _hms(seconds: float) -> str:
+    seconds = int(seconds)
+    if seconds < 3600:
+        return f'{seconds // 60}m{seconds % 60:02d}s'
+    return f'{seconds // 3600}h{(seconds % 3600) // 60:02d}m'
+
+
 class FederatedServer:
     def __init__(self, model, tokenizer, cfg, device, label_names, class_weights=None, tracker=None):
         self.model = model
@@ -43,22 +50,29 @@ class FederatedServer:
     def run(self, shards, val_loader, checkpoint_dir: str) -> List[Dict]:
         os.makedirs(checkpoint_dir, exist_ok=True)
         num_rounds = self.cfg.federated.num_rounds
+        num_clients = len(shards)
+        run_start = time.time()
 
         for round_idx in range(self.start_round, num_rounds):
             round_start = time.time()
-            logger.info(f"{'=' * 60}")
-            logger.info(f"Round {round_idx + 1}/{num_rounds}  (aggregation={self.strategy})")
+            pct = 100 * round_idx / num_rounds
+            logger.info(f"{'=' * 64}")
+            logger.info(f"Round {round_idx + 1}/{num_rounds}  [{pct:3.0f}% complete]  "
+                        f"aggregation={self.strategy}")
 
             client_states, sample_counts, client_losses = [], [], []
             client_scores = [] if self.strategy == 'performance' else None
 
-            for shard in shards:
+            for position, shard in enumerate(shards, start=1):
                 # Broadcast: every client starts the round from the same global state
                 set_trainable_state(self.model, self.global_state)
 
                 dataset = shard.round_dataset(round_idx)
                 loader = make_loader(dataset, self.tokenizer, self.cfg, shuffle=True)
-                stats = train_local(self.model, loader, self.cfg, self.device, self.class_weights)
+                stats = train_local(
+                    self.model, loader, self.cfg, self.device, self.class_weights,
+                    label=f'client {position}/{num_clients}',
+                )
 
                 client_states.append(get_trainable_state(self.model))
                 sample_counts.append(len(dataset))
@@ -96,16 +110,18 @@ class FederatedServer:
                 record['val'] = metrics
                 log_metrics(metrics, prefix=f"  round {round_idx + 1} VAL   ")
 
-            logger.info(f"  round took {record['seconds']:.0f}s, "
-                        f"each client uploaded {record['upload_mb_per_client']:.1f} MB")
-
             self._track_round(record, round_idx + 1)
             self.history.append(record)
             self.save_checkpoint(checkpoint_dir, round_idx + 1)
 
-            if round_idx == self.start_round:
-                remaining = (num_rounds - round_idx - 1) * record['seconds']
-                logger.info(f"  estimated time for the remaining rounds: {remaining / 60:.0f} min")
+            done = round_idx + 1 - self.start_round
+            todo = num_rounds - self.start_round
+            elapsed = time.time() - run_start
+            eta = elapsed / done * (todo - done)
+            logger.info(f"  round done in {record['seconds']:.0f}s  |  "
+                        f"{100 * (round_idx + 1) / num_rounds:3.0f}% complete  |  "
+                        f"elapsed {_hms(elapsed)}  |  eta {_hms(eta)}  |  "
+                        f"upload {record['upload_mb_per_client']:.1f} MB/client")
 
         return self.history
 

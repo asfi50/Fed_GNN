@@ -19,6 +19,7 @@ def train_local(
     device: torch.device,
     class_weights: Optional[torch.Tensor] = None,
     epochs: Optional[int] = None,
+    label: str = '',
 ) -> dict:
     epochs = epochs if epochs is not None else cfg.federated.local_epochs
     model.train()
@@ -44,6 +45,9 @@ def train_local(
 
     start = time.time()
     total_loss, num_batches, nonfinite = 0.0, 0, 0
+    # Report a handful of times per client so a long round is not silent, without
+    # flooding the log the way a per-batch bar would once piped to a notebook.
+    report_every = max(1, total_steps // 4)
 
     for _ in range(epochs):
         for batch in loader:
@@ -71,6 +75,11 @@ def train_local(
 
             total_loss += loss.item()
             num_batches += 1
+
+            if label and num_batches % report_every == 0:
+                pct = 100 * num_batches / total_steps
+                logger.info(f"      {label} {pct:3.0f}%  ({num_batches}/{total_steps} steps)  "
+                            f"loss={total_loss / num_batches:.4f}")
 
     if nonfinite:
         logger.error(f"{nonfinite} of {nonfinite + num_batches} batches produced a "

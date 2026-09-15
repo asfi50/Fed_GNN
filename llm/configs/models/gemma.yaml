@@ -11,11 +11,10 @@ batch_size: 8
 lr: 2.0e-4
 needs_pad_token: true
 gated: true
-# Shipped in bf16 and too large to hold in fp32 on a 16GB card, so the frozen
-# base is kept in fp16 while the LoRA adapters and head stay fp32. The other
-# four models fit in fp32 and do not need this.
+# Shipped in bf16; used where the GPU supports it, fp16 otherwise (T4 does not).
+# Either way the frozen base is half precision and the trainable adapters are
+# fp32, which is what keeps 5.1B weights inside 16GB.
 preferred_dtype: bfloat16
-half_precision_base: true
 lora:
   r: 16
   alpha: 32
