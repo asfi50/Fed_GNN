@@ -27,21 +27,25 @@ def resolve_device(requested: str = 'auto') -> torch.device:
 
 
 def resolve_dtype(device: torch.device, preferred: str = None) -> torch.dtype:
-    """fp16/bf16 only pay off on CUDA; MPS is more reliable in fp32."""
-    if device.type != 'cuda':
-        return torch.float32
+    """Precision of the stored weights.
 
-    if preferred == 'bfloat16':
-        if torch.cuda.is_bf16_supported():
-            return torch.bfloat16
-        # fp32 would be the numerically safer fallback, but models that ship in
-        # bf16 are too big to hold at 4 bytes per weight on a 16GB card:
-        # gemma-4-E2B stores 5.1B weights, which is 20GB in fp32. fp16 is the
-        # only format that fits. Loss is computed in fp32 (see client.py) to
-        # contain the overflow risk that motivated bf16 in the first place.
-        logger.warning("bfloat16 unsupported on this GPU; using fp16 with an fp32 loss")
-        return torch.float16
+    Always fp32. Holding master weights in fp16 and optimising them directly does
+    not work: AdamW's second-moment estimate and the smaller gradients underflow
+    fp16, weights drift to NaN, and the model never leaves its initialisation.
+    Speed comes from autocast during the forward/backward pass instead, which
+    keeps fp32 masters while computing in fp16 - see train_local.
 
+    bf16 is the one exception worth taking, where the hardware supports it.
+    """
+    if device.type == 'cuda' and preferred == 'bfloat16' and torch.cuda.is_bf16_supported():
+        return torch.bfloat16
+    return torch.float32
+
+
+def autocast_dtype(device: torch.device) -> torch.dtype:
+    """Compute precision inside autocast. bf16 where available, else fp16."""
+    if device.type == 'cuda' and torch.cuda.is_bf16_supported():
+        return torch.bfloat16
     return torch.float16
 
 
@@ -51,6 +55,12 @@ def build_model(cfg, num_labels: int, device: torch.device) -> Tuple[torch.nn.Mo
 
     tokenizer = AutoTokenizer.from_pretrained(model_cfg.hf_id)
     dtype = resolve_dtype(device, model_cfg.get('preferred_dtype'))
+
+    if model_cfg.get('half_precision_base') and device.type == 'cuda':
+        # For a base too large to hold in fp32 (gemma-4-E2B stores 5.1B weights,
+        # 20GB at fp32). The base is frozen, so half precision costs it nothing;
+        # the trainable adapters are pulled back up to fp32 below.
+        dtype = torch.float16
 
     model = AutoModelForSequenceClassification.from_pretrained(
         model_cfg.hf_id,
@@ -75,10 +85,22 @@ def build_model(cfg, num_labels: int, device: torch.device) -> Tuple[torch.nn.Mo
         bias='none',
     )
     model = get_peft_model(model, peft_config)
+
+    # Whatever the base is stored as, anything being optimised stays fp32.
+    # Optimiser state in fp16 underflows and the model never learns; autocast
+    # handles the mixed dtypes during the forward pass.
+    upcast = [n for n, p in model.named_parameters() if p.requires_grad and p.dtype != torch.float32]
+    for _, param in model.named_parameters():
+        if param.requires_grad and param.dtype != torch.float32:
+            param.data = param.data.float()
+    if upcast:
+        logger.info(f"Upcast {len(upcast)} trainable tensors to fp32 (base stays {dtype})")
+
     model.to(device)
 
     trainable, total = count_parameters(model)
-    logger.info(f"Trainable: {trainable:,} / {total:,} params ({100 * trainable / total:.3f}%)")
+    logger.info(f"Base dtype {dtype}, trainable: {trainable:,} / {total:,} "
+                f"params ({100 * trainable / total:.3f}%)")
 
     return model, tokenizer
 
