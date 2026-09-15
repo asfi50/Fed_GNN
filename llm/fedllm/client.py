@@ -7,7 +7,7 @@ from typing import Optional
 import torch
 from transformers import get_linear_schedule_with_warmup
 
-from .modeling import amp_context, autocast_dtype
+from .modeling import amp_context, amp_settings
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +37,11 @@ def train_local(
     weights = class_weights.to(device) if class_weights is not None else None
     loss_fn = torch.nn.CrossEntropyLoss(weight=weights)
 
-    # Mixed precision: fp32 master weights, fp16 compute. The scaler keeps small
-    # gradients from underflowing fp16 on the way back.
-    use_amp = device.type == 'cuda'
-    amp_dtype = autocast_dtype(device)
-    scaler = torch.amp.GradScaler(device.type, enabled=use_amp and amp_dtype == torch.float16)
+    # Mixed precision: fp32 trainables, half-precision compute. The scaler keeps
+    # small gradients from underflowing fp16 on the way back; with a bf16 or fp32
+    # base there is nothing to scale.
+    amp_on, amp_dtype = amp_settings(model, device)
+    scaler = torch.amp.GradScaler(device.type, enabled=amp_on and amp_dtype == torch.float16)
 
     start = time.time()
     total_loss, num_batches, nonfinite = 0.0, 0, 0
@@ -54,7 +54,7 @@ def train_local(
             batch = {k: v.to(device) for k, v in batch.items()}
             labels = batch.pop('labels')
 
-            with amp_context(device):
+            with amp_context(model, device):
                 logits = model(**batch).logits
             loss = loss_fn(logits.float(), labels)
 

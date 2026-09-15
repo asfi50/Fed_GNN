@@ -26,41 +26,45 @@ def resolve_device(requested: str = 'auto') -> torch.device:
     return torch.device('cpu')
 
 
-def resolve_dtype(device: torch.device, preferred: str = None) -> torch.dtype:
+def resolve_dtype(device: torch.device, model_cfg) -> torch.dtype:
     """Precision of the FROZEN base weights.
 
-    Half precision is free here: LoRA never updates the base, so it cannot
+    Half precision is normally free: LoRA never updates the base, so it cannot
     accumulate rounding error, and halving it leaves room for activations. What
     must not be half precision is anything being optimised - AdamW's
     second-moment estimate underflows fp16 and the weights walk into NaN - so
     build_model upcasts every trainable tensor to fp32 afterwards.
+
+    Models setting `precision: fp32` opt out entirely. T5 has to: it was trained
+    in bf16 and fills its attention mask with finfo(fp32).min, which overflows
+    fp16 outright. Small models pay nothing for fp32 anyway.
     """
-    if device.type != 'cuda':
+    if device.type != 'cuda' or model_cfg.get('precision') == 'fp32':
         return torch.float32
-    if preferred == 'bfloat16' and torch.cuda.is_bf16_supported():
+    if model_cfg.get('preferred_dtype') == 'bfloat16' and torch.cuda.is_bf16_supported():
         return torch.bfloat16
     return torch.float16
 
 
-def autocast_dtype(device: torch.device) -> torch.dtype:
-    """Compute precision inside autocast. bf16 where available, else fp16."""
-    if device.type == 'cuda' and torch.cuda.is_bf16_supported():
-        return torch.bfloat16
-    return torch.float16
+def amp_settings(model, device: torch.device):
+    """(enabled, dtype) for autocast, derived from how the base was loaded.
 
-
-def amp_context(device: torch.device):
-    """Every forward pass must run inside this.
-
-    The base is half precision while the adapters and head are fp32, so an
-    unwrapped call hits 'mat1 and mat2 must have the same dtype'. Autocast is
-    what reconciles them, which is why this lives in one place rather than being
-    repeated at each call site.
+    Mixed precision is on exactly when the base is half precision, which is also
+    exactly when it is needed: a half base and an fp32 head can only meet inside
+    autocast. An fp32 base needs nothing and gets nothing.
     """
+    dtype = getattr(model, 'fedllm_base_dtype', torch.float32)
+    enabled = device.type == 'cuda' and dtype in (torch.float16, torch.bfloat16)
+    return enabled, dtype
+
+
+def amp_context(model, device: torch.device):
+    """Every forward pass must run inside this - see amp_settings."""
+    enabled, dtype = amp_settings(model, device)
     return torch.autocast(
         device_type=device.type,
-        dtype=autocast_dtype(device),
-        enabled=device.type == 'cuda',
+        dtype=dtype if enabled else torch.float16,
+        enabled=enabled,
     )
 
 
@@ -69,7 +73,7 @@ def build_model(cfg, num_labels: int, device: torch.device) -> Tuple[torch.nn.Mo
     logger.info(f"Loading {model_cfg.hf_id} ({num_labels} labels)...")
 
     tokenizer = AutoTokenizer.from_pretrained(model_cfg.hf_id)
-    dtype = resolve_dtype(device, model_cfg.get('preferred_dtype'))
+    dtype = resolve_dtype(device, model_cfg)
 
     model = AutoModelForSequenceClassification.from_pretrained(
         model_cfg.hf_id,
@@ -106,10 +110,13 @@ def build_model(cfg, num_labels: int, device: torch.device) -> Tuple[torch.nn.Mo
         logger.info(f"Upcast {len(upcast)} trainable tensors to fp32 (base stays {dtype})")
 
     model.to(device)
+    # Read back by amp_settings to decide whether autocast is needed
+    model.fedllm_base_dtype = dtype
 
     trainable, total = count_parameters(model)
-    logger.info(f"Base dtype {dtype}, trainable: {trainable:,} / {total:,} "
-                f"params ({100 * trainable / total:.3f}%)")
+    amp_on, _ = amp_settings(model, device)
+    logger.info(f"Base dtype {dtype} (autocast {'on' if amp_on else 'off'}), trainable: "
+                f"{trainable:,} / {total:,} params ({100 * trainable / total:.3f}%)")
 
     return model, tokenizer
 

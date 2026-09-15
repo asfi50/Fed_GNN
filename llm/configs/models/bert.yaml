@@ -5,6 +5,9 @@ max_length: 128
 batch_size: 32
 lr: 2.0e-4
 needs_pad_token: false
+# 110M parameters is 0.44GB in fp32, so half precision buys nothing here and
+# only adds numerical risk. The three large models still need it.
+precision: fp32
 lora:
   r: 16
   alpha: 32

@@ -5,6 +5,10 @@ max_length: 128
 batch_size: 32
 lr: 2.0e-4
 needs_pad_token: false
+# T5 cannot run in fp16: trained in bf16, it fills its attention mask with
+# finfo(fp32).min (-3.4e38), which overflows fp16's -65504 outright. At 220M
+# parameters fp32 costs under a gigabyte, so there is nothing to trade away.
+precision: fp32
 lora:
   r: 16
   alpha: 32

@@ -30,7 +30,7 @@ def evaluate(model, loader, device, label_names: List[str], max_batches: int = N
             break
         labels = batch.pop('labels')
         batch = {k: v.to(device) for k, v in batch.items()}
-        with amp_context(device):
+        with amp_context(model, device):
             logits = model(**batch).logits
         all_preds.append(logits.float().argmax(dim=-1).cpu().numpy())
         all_labels.append(labels.numpy())

@@ -76,7 +76,7 @@ def check_forward(cfg):
 
     # Same wrapper the training loop uses - the fp16 base and fp32 head only
     # meet correctly inside autocast
-    with amp_context(device):
+    with amp_context(model, device):
         logits = model(**batch).logits
     if logits.shape != (len(SAMPLE_ROWS), NUM_LABELS):
         raise RuntimeError(f"expected logits {(len(SAMPLE_ROWS), NUM_LABELS)}, got {tuple(logits.shape)}")
