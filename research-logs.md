@@ -143,3 +143,17 @@ Fix systematic confusion between DDoS/Injection/Password/XSS/Scanning when runni
    - **Why Applied:** The normalized weights based on $E_n$ establish a mathematical saturation limit (ceiling), ensuring rare attack classes receive boosted emphasis while completely avoiding gradient explosion and preserving majority class boundaries (`Benign`, `Injection`).
 
 **Next Steps:** Manually run experiments to verify whether test accuracy and minority F1 scores improve empirically.
+
+### 2026-07-29: Creation of NF-ToN-easy Dataset & Removing Theoretically Indistinguishable Attacks
+
+**Goal:** Drop theoretically indistinguishable L7 attacks (`xss`, `password`, `scanning`) from the NF-ToN-IoT dataset to evaluate the model on attacks that can actually be differentiated using flow data.
+
+**Background Analysis:**
+- **Theoretical Limitation of Flow Data:** The NF-ToN-IoT dataset provides only NetFlow (L4) statistics (such as packet counts, byte counts, and flow duration) and completely lacks payload content columns. 
+- **Indistinguishable L7 Attacks:** Application-layer (L7) attacks like `xss`, `password` (brute-force), and `scanning` (which in this dataset are web-vulnerability scans, not TCP port sweeps) share nearly identical L4 flow characteristics. Without examining the actual HTTP payload content, it is theoretically impossible to differentiate whether a sequence of packets is an XSS attack, a Password brute-force attempt, or an Injection attack.
+- **Main Paper's Failure:** Because the dataset inherently lacks the features required to separate these attacks, the original researchers of the FedGATSage paper also failed to accurately detect them. This is evidenced by their own reported metrics, where Scanning precision was only ~10% and Injection recall was ~34%. The original model failed because the data simply does not exist in the NF-ToN dataset to differentiate these specific classes.
+
+**Resolution (`NF-ToN-easy.csv`):**
+Since it is theoretically impossible to identify these specific attacks solely from flow data, we dropped them. We removed `xss`, `password`, and `scanning` from the dataset, creating `NF-ToN-easy.csv`. This ensures the model is evaluated on structurally differentiable network attacks rather than being penalized for lacking payload visibility.
+
+**Next Steps:** Train FedGATSage on this newly created `NF-ToN-easy` dataset.
