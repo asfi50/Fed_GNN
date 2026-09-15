@@ -1,0 +1,53 @@
+# Shared settings for every federated LLM experiment.
+# Model-specific settings live in configs/models/<name>.yaml and override these.
+
+seed: 42
+
+data:
+  data_dir: llm/dataset
+  label_col: Attack
+  # Dropped from the serialized text:
+  #   Label  - the binary attack/benign flag, would leak the answer outright
+  #   Attack - the target itself
+  #   Src IP / Dst IP - attacker addresses are near-unique per attack class in
+  #     NF-ToN-IoT, so keeping them lets the model memorise addresses instead of
+  #     learning traffic behaviour. Set include_ips: true to study that effect.
+  drop_columns: [Label, Attack, Src IP, Dst IP]
+  include_ips: false
+
+federated:
+  num_clients: 5
+  num_rounds: 10
+  local_epochs: 1
+  # Rows each client draws from its own shard per round. This is the compute
+  # budget knob: the shard stays large and realistic, only the per-round slice
+  # is capped. Must be identical across models or the comparison is invalid.
+  rows_per_client_per_round: 2000
+  aggregation: naive  # naive | delta_svd | ffa | performance
+
+evaluation:
+  # Per-round monitoring uses a fixed subset so the curves stay comparable;
+  # the final number uses a larger slice of the held-out test set.
+  val_subset: 5000
+  test_subset: 30000
+  eval_every: 1
+  # Batches used to score each client when aggregation: performance. Kept small
+  # because this runs once per client per round, not once per round.
+  client_score_batches: 10
+
+training:
+  weight_decay: 0.01
+  grad_clip: 1.0
+  warmup_ratio: 0.06
+  use_class_weights: true
+  # NF-ToN-IoT is long-tailed enough that raw inverse-frequency weights reach the
+  # thousands for ransomware. Clipping keeps one rare row from dominating a batch.
+  max_class_weight: 50.0
+
+output:
+  output_dir: llm/results
+  save_adapters: true
+  # Adapters upload by default; disable per run with --no_push. Requires HF_TOKEN
+  # with write access, otherwise the run warns and skips the upload.
+  push_to_hub: true
+  hub_prefix: fed-ids

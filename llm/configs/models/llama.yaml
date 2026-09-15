@@ -1,0 +1,13 @@
+name: llama
+hf_id: meta-llama/Llama-3.2-1B
+family: causal
+max_length: 128
+batch_size: 16
+lr: 2.0e-4
+needs_pad_token: true
+gated: true
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: [q_proj, k_proj, v_proj, o_proj]

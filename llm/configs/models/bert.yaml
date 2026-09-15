@@ -1,0 +1,12 @@
+name: bert
+hf_id: bert-base-uncased
+family: encoder
+max_length: 128
+batch_size: 32
+lr: 2.0e-4
+needs_pad_token: false
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: [query, value]

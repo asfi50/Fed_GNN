@@ -1,0 +1,16 @@
+name: gemma
+hf_id: google/gemma-4-E2B
+family: causal
+max_length: 128
+batch_size: 16
+lr: 2.0e-4
+needs_pad_token: true
+gated: true
+# Gemma models are trained in bf16 and are known to overflow in fp16; on a T4
+# (no bf16) run this one in fp32 or force bf16 emulation via --dtype.
+preferred_dtype: bfloat16
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
