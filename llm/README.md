@@ -59,7 +59,12 @@ session. Nothing needs to be prepared locally.
 
 ```python
 !pip install -q -U transformers peft accelerate comet_ml
-!git clone -q https://github.com/<you>/Fed_GNN.git /kaggle/working/repo
+# Kaggle ships torchao 0.10; peft's LoRA dispatcher raises on anything below 0.16
+# rather than skipping it, which breaks get_peft_model for every model. We never
+# use torchao quantisation, so removing it lets peft's check return False cleanly.
+!pip uninstall -q -y torchao
+
+!git clone -q -b llm https://github.com/asfi50/Fed_GNN.git /kaggle/working/repo
 %cd /kaggle/working/repo
 
 import os
@@ -67,8 +72,9 @@ from kaggle_secrets import UserSecretsClient
 os.environ["HF_TOKEN"] = UserSecretsClient().get_secret("HF_TOKEN")  # write token, for adapter upload
 ```
 
-Gemma and Llama are gated — accept their licences on the Hub first, or the
-download returns 403. Enable **Internet** in the notebook settings (needed for
+Gemma and Llama are gated — accept their licences on the Hub with the account
+that owns `HF_TOKEN`, or the download fails with `OSError: You are trying to
+access a gated repo`. Enable **Internet** in the notebook settings (needed for
 the Hub and for Comet).
 
 ### Cell 2 — build the shards from the attached dataset

@@ -34,11 +34,13 @@ def resolve_dtype(device: torch.device, preferred: str = None) -> torch.dtype:
     if preferred == 'bfloat16':
         if torch.cuda.is_bf16_supported():
             return torch.bfloat16
-        # A model that asked for bf16 (Gemma) is one that overflows in fp16, so
-        # fall back to fp32 rather than the format it was warned against.
-        logger.warning("bfloat16 requested but unsupported on this GPU; using fp32 "
-                       "(slower, but fp16 would risk overflow for this model)")
-        return torch.float32
+        # fp32 would be the numerically safer fallback, but models that ship in
+        # bf16 are too big to hold at 4 bytes per weight on a 16GB card:
+        # gemma-4-E2B stores 5.1B weights, which is 20GB in fp32. fp16 is the
+        # only format that fits. Loss is computed in fp32 (see client.py) to
+        # contain the overflow risk that motivated bf16 in the first place.
+        logger.warning("bfloat16 unsupported on this GPU; using fp16 with an fp32 loss")
+        return torch.float16
 
     return torch.float16
 

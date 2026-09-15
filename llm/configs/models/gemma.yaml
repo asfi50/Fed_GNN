@@ -2,12 +2,17 @@ name: gemma
 hf_id: google/gemma-4-E2B
 family: causal
 max_length: 128
-batch_size: 16
+# "E2B" is 2.3B *effective* parameters but 5.1B stored weights - most of the
+# extra sits in per-layer embeddings that are looked up rather than multiplied.
+# Compute behaves like a 2B model; memory does not. At fp16 that is ~10GB of
+# weights, making this the heaviest model here, so the batch is halved to leave
+# room for activations on a 16GB T4. Drop to 4 if it still runs out.
+batch_size: 8
 lr: 2.0e-4
 needs_pad_token: true
 gated: true
-# Gemma models are trained in bf16 and are known to overflow in fp16; on a T4
-# (no bf16) run this one in fp32 or force bf16 emulation via --dtype.
+# Shipped in bf16. T4 has no bf16, so the loader falls back to fp16 (fp32 would
+# need 20GB and cannot fit); the loss is computed in fp32 to limit overflow.
 preferred_dtype: bfloat16
 lora:
   r: 16
