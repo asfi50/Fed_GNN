@@ -7,7 +7,7 @@ from typing import Optional
 import torch
 from transformers import get_linear_schedule_with_warmup
 
-from .modeling import autocast_dtype
+from .modeling import amp_context, autocast_dtype
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ def train_local(
             batch = {k: v.to(device) for k, v in batch.items()}
             labels = batch.pop('labels')
 
-            with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=use_amp):
+            with amp_context(device):
                 logits = model(**batch).logits
             loss = loss_fn(logits.float(), labels)
 

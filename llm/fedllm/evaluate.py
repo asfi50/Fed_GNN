@@ -13,7 +13,7 @@ from sklearn.metrics import (
     precision_recall_fscore_support,
 )
 
-from .modeling import autocast_dtype
+from .modeling import amp_context
 
 logger = logging.getLogger(__name__)
 
@@ -25,15 +25,12 @@ def evaluate(model, loader, device, label_names: List[str], max_batches: int = N
     model.eval()
     all_preds, all_labels = [], []
 
-    use_amp = device.type == 'cuda'
-    amp_dtype = autocast_dtype(device)
-
     for i, batch in enumerate(loader):
         if max_batches is not None and i >= max_batches:
             break
         labels = batch.pop('labels')
         batch = {k: v.to(device) for k, v in batch.items()}
-        with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=use_amp):
+        with amp_context(device):
             logits = model(**batch).logits
         all_preds.append(logits.float().argmax(dim=-1).cpu().numpy())
         all_labels.append(labels.numpy())

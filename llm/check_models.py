@@ -60,7 +60,9 @@ def check_forward(cfg):
 
     from fedllm.aggregation import aggregate
     from fedllm.data import FlowDataset, make_collate_fn
-    from fedllm.modeling import build_model, get_trainable_state, set_trainable_state, state_size_mb
+    from fedllm.modeling import (
+        amp_context, build_model, get_trainable_state, set_trainable_state, state_size_mb,
+    )
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model, tokenizer = build_model(cfg, NUM_LABELS, device)
@@ -72,12 +74,18 @@ def check_forward(cfg):
     batch = {k: v.to(device) for k, v in batch.items()}
     labels = batch.pop('labels')
 
-    logits = model(**batch).logits
+    # Same wrapper the training loop uses - the fp16 base and fp32 head only
+    # meet correctly inside autocast
+    with amp_context(device):
+        logits = model(**batch).logits
     if logits.shape != (len(SAMPLE_ROWS), NUM_LABELS):
         raise RuntimeError(f"expected logits {(len(SAMPLE_ROWS), NUM_LABELS)}, got {tuple(logits.shape)}")
 
     loss = torch.nn.functional.cross_entropy(logits.float(), labels)
     loss.backward()
+
+    if not torch.isfinite(loss):
+        raise RuntimeError(f"loss is {loss.item()} on the very first batch")
 
     grads = [p for p in model.parameters() if p.requires_grad and p.grad is not None]
     if not grads:

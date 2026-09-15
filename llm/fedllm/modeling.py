@@ -49,6 +49,21 @@ def autocast_dtype(device: torch.device) -> torch.dtype:
     return torch.float16
 
 
+def amp_context(device: torch.device):
+    """Every forward pass must run inside this.
+
+    The base is half precision while the adapters and head are fp32, so an
+    unwrapped call hits 'mat1 and mat2 must have the same dtype'. Autocast is
+    what reconciles them, which is why this lives in one place rather than being
+    repeated at each call site.
+    """
+    return torch.autocast(
+        device_type=device.type,
+        dtype=autocast_dtype(device),
+        enabled=device.type == 'cuda',
+    )
+
+
 def build_model(cfg, num_labels: int, device: torch.device) -> Tuple[torch.nn.Module, object]:
     model_cfg = cfg.model
     logger.info(f"Loading {model_cfg.hf_id} ({num_labels} labels)...")
