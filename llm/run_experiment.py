@@ -47,6 +47,9 @@ def parse_args():
     parser.add_argument('--agg', type=str, default=None, choices=list(STRATEGIES))
     parser.add_argument('--rounds', type=int, default=None)
     parser.add_argument('--rows_per_round', type=int, default=None)
+    parser.add_argument('--tag', type=str, default=None,
+                        help='Suffix for the run name, so a rerun under a different budget does not '
+                             'collide with the baseline in Comet, on disk or on the Hub')
     parser.add_argument('--batch_size', type=int, default=None)
     parser.add_argument('--data_dir', type=str, default=None)
     parser.add_argument('--output_dir', type=str, default=None)
@@ -72,6 +75,8 @@ def main():
     torch.manual_seed(cfg.seed)
     device = resolve_device(args.device)
     run_name = f"{cfg.model.name}_{args.split}_{cfg.federated.aggregation}"
+    if args.tag:
+        run_name += f'_{args.tag}'
     out_dir = os.path.join(cfg.output.output_dir, run_name)
     os.makedirs(out_dir, exist_ok=True)
 
@@ -79,7 +84,8 @@ def main():
 
     tracker = init_tracker(
         run_name,
-        tags=[cfg.model.name, args.split, cfg.federated.aggregation, 'federated'],
+        tags=[cfg.model.name, args.split, cfg.federated.aggregation, 'federated']
+             + ([args.tag] if args.tag else []),
         disabled=args.no_comet,
     )
 
