@@ -68,6 +68,42 @@ def amp_context(model, device: torch.device):
     )
 
 
+def ensure_pad_token(model, tokenizer):
+    """Give the model a pad token id it can actually find.
+
+    A classification head locates each sequence's last real token by counting
+    padding, so without a pad id it refuses any batch larger than one. Decoder
+    checkpoints often ship without one, and composite configs (Qwen3.5 and other
+    multimodal models) read it from a nested text config rather than the top
+    level - so it is written to every config that exposes the field, then read
+    back to confirm it stuck.
+    """
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    pad_id = tokenizer.pad_token_id
+    if pad_id is None:
+        raise RuntimeError(
+            f"{tokenizer.__class__.__name__} has neither a pad token nor an eos token to "
+            "fall back on; this model needs an explicit pad token before it can be batched."
+        )
+
+    candidates = [model.config, getattr(model.config, 'text_config', None)]
+    get_text_config = getattr(model.config, 'get_text_config', None)
+    if callable(get_text_config):
+        candidates.append(get_text_config())
+
+    seen = set()
+    for config in candidates:
+        if config is not None and id(config) not in seen:
+            seen.add(id(config))
+            config.pad_token_id = pad_id
+
+    if getattr(model.config, 'pad_token_id', None) is None:
+        raise RuntimeError("pad_token_id did not take on this model's config")
+    logger.info(f"pad_token_id={pad_id} ({tokenizer.pad_token!r}), set on {len(seen)} config(s)")
+    return pad_id
+
+
 def build_model(cfg, num_labels: int, device: torch.device) -> Tuple[torch.nn.Module, object]:
     model_cfg = cfg.model
     logger.info(f"Loading {model_cfg.hf_id} ({num_labels} labels)...")
@@ -81,12 +117,7 @@ def build_model(cfg, num_labels: int, device: torch.device) -> Tuple[torch.nn.Mo
         torch_dtype=dtype,
     )
 
-    if model_cfg.get('needs_pad_token'):
-        # Decoder models ship without a pad token, but the classification head
-        # needs one to find the last real token of each sequence.
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-        model.config.pad_token_id = tokenizer.pad_token_id
+    ensure_pad_token(model, tokenizer)
 
     lora = model_cfg.lora
     peft_config = LoraConfig(

@@ -4,7 +4,6 @@ family: causal
 max_length: 128
 batch_size: 16
 lr: 2.0e-4
-needs_pad_token: true
 lora:
   r: 16
   alpha: 32

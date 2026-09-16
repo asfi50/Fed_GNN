@@ -9,7 +9,6 @@ max_length: 128
 # room for activations on a 16GB T4. Drop to 4 if it still runs out.
 batch_size: 8
 lr: 2.0e-4
-needs_pad_token: true
 gated: true
 # Shipped in bf16; used where the GPU supports it, fp16 otherwise (T4 does not).
 # Either way the frozen base is half precision and the trainable adapters are
