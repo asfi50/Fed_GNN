@@ -16,6 +16,11 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 logger = logging.getLogger(__name__)
 
 
+def _transformers_version() -> str:
+    import transformers
+    return transformers.__version__
+
+
 def resolve_device(requested: str = 'auto') -> torch.device:
     if requested != 'auto':
         return torch.device(requested)
@@ -111,11 +116,25 @@ def build_model(cfg, num_labels: int, device: torch.device) -> Tuple[torch.nn.Mo
     tokenizer = AutoTokenizer.from_pretrained(model_cfg.hf_id)
     dtype = resolve_dtype(device, model_cfg)
 
-    model = AutoModelForSequenceClassification.from_pretrained(
-        model_cfg.hf_id,
-        num_labels=num_labels,
-        torch_dtype=dtype,
-    )
+    try:
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_cfg.hf_id,
+            num_labels=num_labels,
+            torch_dtype=dtype,
+        )
+    except ValueError as e:
+        if 'Unrecognized configuration class' not in str(e):
+            raise
+        # transformers answers this with a hundred config names and no advice.
+        # Every architecture here goes through the one AutoModel class, so a
+        # model without that head cannot join the study as-is.
+        raise RuntimeError(
+            f"{model_cfg.hf_id} has no sequence-classification head in transformers "
+            f"{_transformers_version()}. This pipeline routes every architecture through "
+            f"AutoModelForSequenceClassification, so either pick a checkpoint from the same "
+            f"family that does support it (newer multimodal releases often do not, while the "
+            f"previous generation does), or give this model its own pooling head."
+        ) from e
 
     ensure_pad_token(model, tokenizer)
 

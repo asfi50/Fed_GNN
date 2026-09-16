@@ -136,7 +136,7 @@ def main():
         try:
             status = check(cfg)
         except Exception as e:
-            status = f"FAIL  {type(e).__name__}: {str(e)[:50]}"
+            status = f"FAIL  {type(e).__name__}: {str(e)[:95]}"
             failures.append(name)
             if args.verbose:
                 traceback.print_exc()

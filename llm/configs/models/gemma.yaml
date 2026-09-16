@@ -1,18 +1,16 @@
 name: gemma
-hf_id: google/gemma-4-E2B
+# Gemma 4 does not work here: transformers has no sequence-classification head for
+# Gemma4Config (its multimodal class), so AutoModelForSequenceClassification refuses
+# it outright. Gemma3Config is supported, so this is the newest Gemma the shared
+# code path can take — and at 1B it sits alongside Llama-3.2-1B for comparison.
+hf_id: google/gemma-3-1b-pt
 family: causal
 max_length: 128
-# "E2B" is 2.3B *effective* parameters but 5.1B stored weights - most of the
-# extra sits in per-layer embeddings that are looked up rather than multiplied.
-# Compute behaves like a 2B model; memory does not. At fp16 that is ~10GB of
-# weights, making this the heaviest model here, so the batch is halved to leave
-# room for activations on a 16GB T4. Drop to 4 if it still runs out.
-batch_size: 8
+batch_size: 16
 lr: 2.0e-4
 gated: true
 # Shipped in bf16; used where the GPU supports it, fp16 otherwise (T4 does not).
-# Either way the frozen base is half precision and the trainable adapters are
-# fp32, which is what keeps 5.1B weights inside 16GB.
+# Either way the frozen base is half precision and the trainable adapters are fp32.
 preferred_dtype: bfloat16
 lora:
   r: 16
