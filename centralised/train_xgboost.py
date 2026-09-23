@@ -15,19 +15,19 @@ import os
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
+from sklearn.utils.class_weight import compute_sample_weight
 from xgboost import XGBClassifier
 
 from comet_utils import evaluate_and_log, start_experiment
 
 TARGET_COL = "Attack"
+SPLIT_COL = "split"
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data", required=True, help="Balanced CSV from preprocess.py")
-    parser.add_argument("--test-size", type=float, default=0.2)
     parser.add_argument("--n-estimators", type=int, default=300)
     parser.add_argument("--max-depth", type=int, default=8)
     parser.add_argument("--learning-rate", type=float, default=0.1)
@@ -38,16 +38,16 @@ def main():
     args = parser.parse_args()
 
     df = pd.read_csv(args.data)
-    y_raw = df[TARGET_COL]
-    X = df.drop(columns=[TARGET_COL]).select_dtypes(include=[np.number])
-
     le = LabelEncoder()
-    y = le.fit_transform(y_raw)
+    y = le.fit_transform(df[TARGET_COL])
     class_names = le.classes_.tolist()
+    X = df.drop(columns=[TARGET_COL, SPLIT_COL]).select_dtypes(include=[np.number])
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=args.test_size, stratify=y, random_state=args.seed
-    )
+    # preprocess.py splits before balancing, so the test set keeps the natural
+    # class distribution. Re-splitting here would undo that.
+    is_train = (df[SPLIT_COL] == "train").to_numpy()
+    X_train, y_train = X[is_train], y[is_train]
+    X_test, y_test = X[~is_train], y[~is_train]
 
     exp = None if args.no_comet else start_experiment(
         "xgboost-nfton-centralised", tags=["xgboost", "nfton", "centralised"]
@@ -70,7 +70,8 @@ def main():
         })
 
     model = XGBClassifier(**params)
-    model.fit(X_train, y_train)
+    # Dedup leaves classes unequal (see preprocess.py), so weight them inversely.
+    model.fit(X_train, y_train, sample_weight=compute_sample_weight("balanced", y_train))
 
     y_pred = model.predict(X_test)
     os.makedirs(args.out_dir, exist_ok=True)

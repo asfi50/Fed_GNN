@@ -54,14 +54,19 @@ def plot_confusion_matrix(cm: np.ndarray, class_names, title: str, out_path: str
 def evaluate_and_log(exp, model_name: str, y_true, y_pred, class_names, out_dir: str) -> dict:
     os.makedirs(out_dir, exist_ok=True)
 
+    # The split is by flow vector, not stratified, so a rare class can be absent
+    # from the test set. Pin the label set so that stays a row of zeros, not a crash.
+    labels = list(range(len(class_names)))
+
     acc = accuracy_score(y_true, y_pred)
     bal_acc = balanced_accuracy_score(y_true, y_pred)
-    macro_f1 = f1_score(y_true, y_pred, average="macro")
-    report = classification_report(y_true, y_pred, target_names=class_names, output_dict=True, zero_division=0)
-    cm = confusion_matrix(y_true, y_pred)
+    macro_f1 = f1_score(y_true, y_pred, average="macro", labels=labels, zero_division=0)
+    report = classification_report(y_true, y_pred, labels=labels, target_names=class_names,
+                                   output_dict=True, zero_division=0)
+    cm = confusion_matrix(y_true, y_pred, labels=labels)
 
     print(f"[{model_name}] accuracy={acc:.4f} balanced_accuracy={bal_acc:.4f} macro_f1={macro_f1:.4f}")
-    print(classification_report(y_true, y_pred, target_names=class_names, zero_division=0))
+    print(classification_report(y_true, y_pred, labels=labels, target_names=class_names, zero_division=0))
 
     metrics = {"accuracy": acc, "balanced_accuracy": bal_acc, "macro_f1": macro_f1}
     for cls, m in report.items():
