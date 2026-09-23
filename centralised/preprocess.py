@@ -123,6 +123,28 @@ def balance_classes(df: pd.DataFrame, samples_per_class: int, seed: int) -> pd.D
     return balanced.sample(frac=1, random_state=seed).reset_index(drop=True)
 
 
+# NF-V2 exporters store a literal inf (or an astronomically large finite value)
+# in throughput-style columns when a flow's duration rounds to zero — a
+# divide-by-near-zero baked into the raw data itself, not something
+# engineer_features() produces. xgboost/sklearn reject inf outright, and a
+# large-enough finite value silently overflows to inf when cast to float32.
+FLOAT32_SAFE_BOUND = 1e15
+
+
+def sanitize_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    """Replace inf and float32-overflowing values in numeric columns with 0.
+    Per-row only — no cross-row information is used, so this doesn't affect
+    the leakage analysis above."""
+    df = df.copy()
+    num_cols = df.select_dtypes(include=[np.number]).columns
+    bad = ~np.isfinite(df[num_cols]) | (df[num_cols].abs() > FLOAT32_SAFE_BOUND)
+    n_bad = int(bad.to_numpy().sum())
+    if n_bad:
+        logger.info("Sanitizing %d inf/overflowing numeric cell(s) -> 0", n_bad)
+        df[num_cols] = df[num_cols].mask(bad, 0)
+    return df
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True, help="Path to raw NF-ToN-IoT.csv")
@@ -168,6 +190,7 @@ def main():
     train_df[SPLIT_COL], test_df[SPLIT_COL] = "train", "test"
     out = pd.concat([train_df, test_df], ignore_index=True)
     out = out.drop(columns=[c for c in DROP_COLS if c in out.columns])
+    out = sanitize_numeric(out)
 
     logger.info("Final dataset: %d rows, %d columns", *out.shape)
     logger.info("Train class distribution:\n%s", train_df[TARGET_COL].value_counts().to_string())
