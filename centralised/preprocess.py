@@ -138,7 +138,12 @@ def main():
     args = parser.parse_args()
 
     logger.info("Loading %s%s", args.input, f" (nrows={args.nrows}, SMOKE TEST)" if args.nrows else "")
-    df = pd.read_csv(args.input, nrows=args.nrows)
+    if args.input.lower().endswith(".parquet"):
+        df = pd.read_parquet(args.input)
+        if args.nrows:
+            df = df.head(args.nrows)
+    else:
+        df = pd.read_csv(args.input, nrows=args.nrows)
     logger.info("Loaded %d rows. Raw class counts:\n%s", len(df), df[TARGET_COL].value_counts().to_string())
 
     counts = df[TARGET_COL].value_counts()
