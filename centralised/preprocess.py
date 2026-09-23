@@ -21,6 +21,7 @@ run (full 1.3M rows) happens on Kaggle via run_kaggle.ipynb.
 """
 import argparse
 import logging
+import os
 
 import numpy as np
 import pandas as pd
@@ -139,6 +140,8 @@ def main():
     logger.info("Final balanced dataset: %d rows, %d columns", *balanced.shape)
     logger.info("Balanced class distribution:\n%s", balanced[TARGET_COL].value_counts().to_string())
 
+    out_dir = os.path.dirname(os.path.abspath(args.output))
+    os.makedirs(out_dir, exist_ok=True)
     balanced.to_csv(args.output, index=False)
     logger.info("Saved to %s", args.output)
 
