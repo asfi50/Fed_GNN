@@ -19,6 +19,11 @@ different door, so they are gone.
 Also dropped: L4_SRC_PORT (ephemeral, pure memorisation — it was the Random
 Forest's top feature) and anything derived from it.
 
+NF-ToN-IoT-v2 adds more of the same: MIN_TTL/MAX_TTL and TCP_WIN_MAX_IN/OUT
+reveal the sending machine's OS (MIN_TTL was 31% of XGBoost's importance), and
+DNS_QUERY_ID is a random transaction ID (Random Forest's top feature). All
+dropped for the same reason as the source IP.
+
 SPLITTING — 63.7% of raw rows belong to an exact duplicate group, so a plain
 random split puts identical flows on both sides and rewards memorisation.
 Rows are therefore split by flow-feature vector: every distinct vector goes
@@ -51,7 +56,14 @@ FLOW_COLS = [
     "L4_DST_PORT", "PROTOCOL", "L7_PROTO", "IN_BYTES", "OUT_BYTES",
     "IN_PKTS", "OUT_PKTS", "TCP_FLAGS", "FLOW_DURATION_MILLISECONDS",
 ]
-DROP_COLS = ["IPV4_SRC_ADDR", "IPV4_DST_ADDR", "L4_SRC_PORT", "Label"]
+DROP_COLS = [
+    "IPV4_SRC_ADDR", "IPV4_DST_ADDR", "L4_SRC_PORT", "Label",
+    # NF-V2 only. TTL and TCP window size fingerprint the sender's OS, and each
+    # class comes from 2-10 attacker IPs, so they identify the machine rather
+    # than the attack — the source-IP leak by another route. DNS_QUERY_ID is a
+    # random per-query transaction ID, ephemeral like L4_SRC_PORT.
+    "MIN_TTL", "MAX_TTL", "TCP_WIN_MAX_IN", "TCP_WIN_MAX_OUT", "DNS_QUERY_ID",
+]
 
 
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
